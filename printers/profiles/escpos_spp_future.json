@@ -1,0 +1,20 @@
+{
+  "model_id": "escpos_spp_future",
+  "display_name": "Future ESC/POS SPP printer (NOT implemented)",
+  "protocol_family": "escpos",
+  "supported_transports": ["bluetooth_classic"],
+  "bluetooth_name_patterns": ["POS", "ESC", "Printer"],
+  "service_uuid": "",
+  "write_uuid": "SPP",
+  "notify_uuid": "",
+  "width_dots": 384,
+  "use_lattice": false,
+  "mirror_rows": false,
+  "energy": 0,
+  "quality": 0,
+  "speed": 0,
+  "feed_dots": 0,
+  "row_delay_ms": 0,
+  "write_chunk": 0,
+  "implemented": false
+}

@@ -1,0 +1,20 @@
+{
+  "model_id": "mx06",
+  "display_name": "MX06 / MX05 / YT01",
+  "protocol_family": "tiny_iprint",
+  "supported_transports": ["ble"],
+  "bluetooth_name_patterns": ["MX06", "MX05", "MX10", "YT01"],
+  "service_uuid": "AE30",
+  "write_uuid": "AE01",
+  "notify_uuid": "AE02",
+  "width_dots": 384,
+  "use_lattice": true,
+  "mirror_rows": true,
+  "energy": 12000,
+  "quality": 51,
+  "speed": 30,
+  "feed_dots": 64,
+  "row_delay_ms": 10,
+  "write_chunk": 20,
+  "implemented": true
+}

@@ -1,0 +1,8 @@
+.pio/
+build/
+src/app/secrets.h
+__pycache__/
+*.pyc
+*.o
+*.exe
+.vscode/

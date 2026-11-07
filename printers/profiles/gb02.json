@@ -1,0 +1,20 @@
+{
+  "model_id": "gb02",
+  "display_name": "GB02 (58mm Cat Printer)",
+  "protocol_family": "tiny_iprint",
+  "supported_transports": ["ble"],
+  "bluetooth_name_patterns": ["GB02"],
+  "service_uuid": "AE30",
+  "write_uuid": "AE01",
+  "notify_uuid": "AE02",
+  "width_dots": 384,
+  "use_lattice": true,
+  "mirror_rows": true,
+  "energy": 12000,
+  "quality": 51,
+  "speed": 26,
+  "feed_dots": 64,
+  "row_delay_ms": 10,
+  "write_chunk": 20,
+  "implemented": true
+}
