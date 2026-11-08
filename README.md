@@ -5,9 +5,14 @@ printers. V0.1 is a **compile-verified + Mock-tested architecture skeleton**.
 
 **There is no physical printer and no ESP32-WROOM-32E board on the desk.**
 Nothing here claims a successful real print or a Classic Bluetooth validation.
-Frozen tag: **`v0.1.1-pre-hardware`** (2026-11-07 pre-hardware fixes: callback
-lifetime, bounded bitmap rows, two-phase BLE discovery, `uncertain_partial`
-mid-job semantics, job_id-only dedup — no new features).
+Current tag: **`v0.1.2-pre-hardware`** (2026-11-08: fixed the real N16R8 board
+`memory_type` from `opi_opi` to `qio_opi`; firmware flashed and boot/AP/HTTP/BLE
+verified on hardware). `v0.1.1-pre-hardware` is kept as the pre-hardware baseline
+that exposed the board-config error on its first real flash.
+
+`v0.1.1-pre-hardware` (2026-11-07) covered callback lifetime, bounded bitmap
+rows, two-phase BLE discovery, `uncertain_partial` mid-job semantics and
+job_id-only dedup — no new features.
 
 ## NOW (V0.1)
 ESP32-S3, Wi-Fi, BLE, Tiny/iPrint, HTTP JSON debug API, local print queue,
@@ -71,12 +76,26 @@ mirrors the project to `C:\Users\Public\rtb-v01-build` and uses
 Board differences (recorded, not hidden):
 | target | board | flash | PSRAM | partitions | USB |
 |---|---|---|---|---|---|
-| s3_n16r8 | esp32-s3-devkitc-1 | 16MB | OPI 8MB | default_16MB.csv | native USB / UART |
+| s3_n16r8 | esp32-s3-devkitc-1 | 16MB QUAD | OPI 8MB | default_16MB.csv | native USB / UART |
 | s3_supermini | esp32-s3-supermini | 8MB | none | default_8MB.csv | native USB CDC on boot |
 | wroom32e_future | esp32dev | 4MB | none | huge_app.csv | USB-UART |
 
+`s3_n16r8` uses `board_build.arduino.memory_type = qio_opi` (QIO quad flash +
+OPI PSRAM). The original `opi_opi` assumed **octal flash**, but the real module's
+eFuse reports quad flash, so the first hardware flash aborted at `cpu_start` with
+`Octal Flash option selected, but EFUSE not configured!`. No eFuse was changed.
+Verified on hardware 2026-11-08, see `docs/V0.1_REPORT.md`.
+
 `wroom32e_future` is **build/abstraction only**: no board present, no Classic
 implementation, no hardware verification.
+
+## Real hardware status (2026-11-08)
+`s3_n16r8` flashed on COM6 and booted cleanly: no reboot loop, `setup()` runs,
+flash `16777216` bytes (16 MB), PSRAM `8386279` bytes (~8 MB, `psram=true`),
+`RTB-V0.1-AP` created, HTTP server answers `/api/status`,
+`/api/capabilities`, `/api/scan` (8 real BLE advertisements seen). No panic /
+Guru Meditation / watchdog / brownout. **No printer was connected; print
+functionality is NOT validated.**
 
 ## Mock tests (no board required)
 ```powershell

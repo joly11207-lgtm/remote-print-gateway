@@ -1,16 +1,24 @@
 # Hardware arrival test plan
 
-Trigger: the real CatPrinter / 喵喵机 (GB01-class) arrives. Nothing in this
-document has been executed yet. V0.1 currently has **no physical printer** and
-**no ESP32-WROOM-32E board**.
+Trigger: the real CatPrinter / 喵喵机 (GB01-class) arrives. V0.1 currently has
+**no physical printer** and **no ESP32-WROOM-32E board**.
 
-This plan reflects the frozen `v0.1.1-pre-hardware` fixes: two-phase discovery,
-bounded bitmap rows, safe notification callback lifetime, `uncertain_partial`
-mid-job semantics, and `job_id`-only dedup. No feature/protocol/website work
-was added.
+Status 2026-11-08: **board-only steps 0 and 1 were executed** on the real
+ESP32-S3 N16R8 (firmware flashed, boot/capabilities/AP/HTTP/BLE scanner
+verified). Everything involving an actual printer (sections 2-7, except the
+generic BLE scan smoke check) remains **unexecuted**. See
+`docs/V0.1_REPORT.md` for the recorded hardware run.
+
+This plan reflects `v0.1.2-pre-hardware`: two-phase discovery, bounded bitmap
+rows, safe notification callback lifetime, `uncertain_partial` mid-job
+semantics, `job_id`-only dedup, and the real-hardware `s3_n16r8` memory type
+fix (`opi_opi` -> `qio_opi`). No feature/protocol/website work was added.
 
 ## 0. Preconditions
 - ESP32-S3 N16R8 flashed with `s3_n16r8` build (`tools/build.ps1`).
+  **Done 2026-11-08** with `memory_type=qio_opi`. The original `opi_opi`
+  build aborted at `cpu_start` (`Octal Flash option selected, but EFUSE not
+  configured!`) because the module has quad/QIO flash; no eFuse was changed.
 - Printer fully charged, paper loaded, powered on (it auto-sleeps ~1 min idle).
 - Serial monitor at 115200 and the board reachable over Wi-Fi STA or AP
   `RTB-V0.1-AP`.
@@ -23,6 +31,13 @@ was added.
    - `bluetooth_classic.available=false`, `unavailable_reason=NOT_SUPPORTED_ON_THIS_TARGET`
    - `verification.real_printer_tested=false` (must stay false until step 5 passes)
 4. `POST /api/mock {"enabled":false}` -> switch to the real BLE transport.
+
+**Executed 2026-11-08 (board only, no printer):** clean boot with banner, no
+reboot loop in 35 s; `flash_size=16777216` (16 MB), `psram_size=8386279`
+(~8 MB, `psram=true`); `wifi=true`, `ble=true`, `bluetooth_classic=false`;
+AP `RTB-V0.1-AP` up and HTTP 200 on `/api/status` and `/api/capabilities`;
+`/api/scan` returned 8 real BLE advertisements. Note the known stale report
+flags in `docs/V0.1_REPORT.md` (`esp32_s3_n16r8_hardware_flashed=false` etc.).
 
 ## 2. BLE discovery / fingerprint
 1. `GET /api/scan`; record `name`, `address`, `rssi`, `service_uuid`,
