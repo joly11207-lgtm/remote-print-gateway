@@ -1,0 +1,21 @@
+{
+  "model_id": "x18_aijixing",
+  "display_name": "X18 / 爱记星",
+  "protocol_family": "tiny_iprint",
+  "supported_transports": ["ble"],
+  "bluetooth_name_patterns": ["X18-*", "X18"],
+  "service_uuid": "AE30",
+  "advertised_service_uuid": "AF30",
+  "write_uuid": "AE01",
+  "notify_uuid": "AE02",
+  "width_dots": 0,
+  "use_lattice": false,
+  "mirror_rows": false,
+  "energy": 0,
+  "quality": 0,
+  "speed": 0,
+  "feed_dots": 0,
+  "row_delay_ms": 0,
+  "write_chunk": 0,
+  "implemented": false
+}

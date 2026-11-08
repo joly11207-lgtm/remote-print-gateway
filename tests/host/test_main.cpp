@@ -319,9 +319,31 @@ static void runTinyOverTransport(PrinterTransport& transport, const char* label)
 
 static void testCatalogAndFingerprint() {
   section("Device catalog / protocol fingerprint");
-  CHECK(DeviceCatalog::count() == 5);
+  CHECK(DeviceCatalog::count() == 6);
   CHECK(DeviceCatalog::findByModelId("gb01") != nullptr);
   CHECK(DeviceCatalog::findByModelId("does_not_exist") == nullptr);
+
+  // X18 / 爱记星: advertised AF30 is NOT the GATT print service (AE30).
+  const DeviceProfile* x18 = DeviceCatalog::findByModelId("x18_aijixing");
+  CHECK(x18 != nullptr);
+  CHECK(std::string(x18->service_uuid) == "AE30");
+  CHECK(std::string(x18->advertised_service_uuid) == "AF30");
+  CHECK(std::string(x18->write_uuid) == "AE01");
+  CHECK(std::string(x18->notify_uuid) == "AE02");
+  CHECK(x18->protocol_family == ProtocolFamily::TinyIPrint);
+  CHECK(profileSupports(*x18, TransportKind::Ble));
+  CHECK(!x18->implemented);
+  CHECK(x18->width_dots == 0);
+  Endpoint x18_ep;
+  x18_ep.kind = TransportKind::Ble;
+  x18_ep.name = "X18-47E3";
+  x18_ep.service_uuid = "0000AF30-0000-1000-8000-00805F9B34FB";
+  const CatalogMatch x18_match = DeviceCatalog::match(x18_ep);
+  CHECK(x18_match.profile != nullptr);
+  CHECK(std::string(x18_match.profile->model_id) == "x18_aijixing");
+  std::string x18_json;
+  DeviceCatalog::toJson(x18_json);
+  CHECK(x18_json.find("\"advertised_service_uuid\":\"AF30\"") != std::string::npos);
 
   Endpoint ble_ep = gb01Endpoint(TransportKind::Ble);
   CatalogMatch m = DeviceCatalog::match(ble_ep);

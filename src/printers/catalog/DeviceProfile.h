@@ -37,6 +37,10 @@ struct DeviceProfile {
   uint8_t row_delay_ms;
   uint16_t write_chunk;
   bool implemented;  // only tiny_iprint profiles are implemented in V0.1
+  // Advertisement-only UUID, deliberately kept SEPARATE from service_uuid
+  // (the real GATT print service). X18 advertises AF30 but exposes AE30 in
+  // GATT. Empty string when no distinct advertised UUID was observed.
+  const char* advertised_service_uuid;
 };
 
 inline bool profileSupports(const DeviceProfile& p, TransportKind k) {

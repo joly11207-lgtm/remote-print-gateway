@@ -30,7 +30,13 @@ def load_profiles() -> dict:
         missing = REQUIRED_KEYS - set(data)
         assert not missing, f"{path.name}: missing keys {sorted(missing)}"
         assert data["supported_transports"], f"{path.name}: no transports"
-        assert data["width_dots"] > 0, f"{path.name}: invalid width"
+        # An identification-only profile may legitimately have an unknown
+        # print width; it must never be marked printable in that case.
+        if data["width_dots"] == 0:
+            assert not data["implemented"], \
+                f"{path.name}: unknown width must not be printable"
+        else:
+            assert data["width_dots"] > 0, f"{path.name}: invalid width"
         if data["implemented"]:
             assert data["protocol_family"] == "tiny_iprint", \
                 f"{path.name}: only tiny_iprint is implemented in V0.1"
@@ -39,12 +45,25 @@ def load_profiles() -> dict:
         if "bluetooth_classic" in data["supported_transports"]:
             assert not data["implemented"], \
                 f"{path.name}: Classic profile must stay unimplemented in V0.1"
+        # The advertised UUID is NOT the GATT print service. Never let an
+        # advertisement-only UUID leak into service_uuid.
+        if "advertised_service_uuid" in data:
+            assert data["advertised_service_uuid"] != data["service_uuid"], \
+                f"{path.name}: advertised/GATT service UUID must be separated"
+        if data["model_id"] == "x18_aijixing":
+            assert data["service_uuid"] == "AE30", "X18 GATT print service is AE30"
+            assert data["advertised_service_uuid"] == "AF30", \
+                "X18 advertised service is AF30 (not the print service)"
+            assert data["write_uuid"] == "AE01" and data["notify_uuid"] == "AE02"
+            assert not data["implemented"] and data["width_dots"] == 0, \
+                "X18 must stay identification-only until a real print confirms geometry"
         result[data["model_id"]] = data
     return result
 
 
 def load_catalog_dump(executable: str) -> dict:
-    output = subprocess.check_output([executable], text=True)
+    # Force UTF-8: display_name may contain non-ASCII (e.g. X18 / 爱记星).
+    output = subprocess.check_output([executable], text=True, encoding="utf-8")
     rows = json.loads(output)
     return {row["model_id"]: row for row in rows}
 

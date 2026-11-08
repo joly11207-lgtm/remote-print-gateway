@@ -113,6 +113,11 @@ void DeviceCatalog::toJson(std::string& out) {
     out += ",\"bluetooth_name_patterns\":" +
            stringArray(p.bluetooth_name_patterns, p.name_pattern_count);
     out += ",\"service_uuid\":" + jsonString(p.service_uuid);
+    // Advertisement UUID is a separate, optional field. Only emitted when a
+    // distinct advertised UUID was actually observed on hardware.
+    if (p.advertised_service_uuid && p.advertised_service_uuid[0] != '\0') {
+      out += ",\"advertised_service_uuid\":" + jsonString(p.advertised_service_uuid);
+    }
     out += ",\"write_uuid\":" + jsonString(p.write_uuid);
     out += ",\"notify_uuid\":" + jsonString(p.notify_uuid);
     out += ",\"width_dots\":" + std::to_string(p.width_dots);
