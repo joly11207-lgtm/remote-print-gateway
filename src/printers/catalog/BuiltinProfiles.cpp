@@ -38,12 +38,14 @@ const DeviceProfile kBuiltinProfiles[] = {
 
     // X18 / 爱记星: AE30 GATT print service confirmed on real hardware
     // 2026-11-08 via a single A3 status query (valid frame + correct CRC).
-    // Advertises AF30, which is NOT the print service. Print parameters
-    // (width, energy, lattice, mirror) are deliberately left unknown/zero and
-    // implemented=false: no real print has been attempted yet.
+    // Advertises AF30, which is NOT the print service.
+    // TEMPORARY first-print experiment (2026-11-08): lowest-risk values taken
+    // individually from the verified AE30 profiles; width_dots=384 is an
+    // EXPERIMENTAL value, not a confirmed spec. implemented stays false --
+    // this profile is reached only by an explicit /api/connect model_id.
     {"x18_aijixing", "X18 / 爱记星", ProtocolFamily::TinyIPrint, kSupportBle,
-     kX18Names, 2, "AE30", "AE01", "AE02", 0, false, false, 0, 0, 0, 0, 0, 0,
-     false, "AF30"},
+     kX18Names, 2, "AE30", "AE01", "AE02", 384, true, true, 12000, 51, 26, 64,
+     10, 20, false, "AF30"},
 };
 
 const size_t kBuiltinProfileCount = sizeof(kBuiltinProfiles) / sizeof(kBuiltinProfiles[0]);

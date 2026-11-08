@@ -333,7 +333,8 @@ static void testCatalogAndFingerprint() {
   CHECK(x18->protocol_family == ProtocolFamily::TinyIPrint);
   CHECK(profileSupports(*x18, TransportKind::Ble));
   CHECK(!x18->implemented);
-  CHECK(x18->width_dots == 0);
+  // 384 is the first-print EXPERIMENTAL value, not a confirmed specification.
+  CHECK(x18->width_dots == 384);
   Endpoint x18_ep;
   x18_ep.kind = TransportKind::Ble;
   x18_ep.name = "X18-47E3";

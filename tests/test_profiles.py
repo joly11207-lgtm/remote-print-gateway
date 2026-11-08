@@ -55,8 +55,12 @@ def load_profiles() -> dict:
             assert data["advertised_service_uuid"] == "AF30", \
                 "X18 advertised service is AF30 (not the print service)"
             assert data["write_uuid"] == "AE01" and data["notify_uuid"] == "AE02"
-            assert not data["implemented"] and data["width_dots"] == 0, \
-                "X18 must stay identification-only until a real print confirms geometry"
+            # First-print experiment: 384 is an EXPERIMENTAL width, not a
+            # confirmed spec. implemented must remain false either way.
+            assert data["width_dots"] in (0, 384), \
+                "X18 width is experimental; only 0 (unknown) or 384 (trial) allowed"
+            assert not data["implemented"], \
+                "X18 must not be auto-enabled until a human confirms the first print"
         result[data["model_id"]] = data
     return result
 

@@ -4,6 +4,11 @@
 #include "config/RtbConfig.h"
 
 #if RTB_ENABLE_BLE
+// TEMPORARY: first-print TX/RX evidence for the X18 real-hardware experiment.
+// Remove this define (and the guarded prints) after the experiment is reviewed.
+#define RTB_X18_FIRST_PRINT_LOG 1
+
+#include <Arduino.h>
 #include <BLEAdvertisedDevice.h>
 #include <BLEClient.h>
 #include <BLEDevice.h>
@@ -81,6 +86,9 @@ struct BleTransport::Impl {
       owner_->notify_subscribed = false;
       // A spontaneous link drop can still be followed by a late notify.
       owner_->callback = NotificationCallback();
+#if defined(RTB_X18_FIRST_PRINT_LOG)
+      Serial.println("[BLE] onDisconnect");
+#endif
     }
 
    private:
@@ -97,6 +105,16 @@ BleTransport::Impl* g_active_impl = nullptr;  // single active BLE link in V0.1
 void notifyTrampoline(BLERemoteCharacteristic*, uint8_t* data, size_t length, bool) {
   BleTransport::Impl* impl = g_active_impl;
   if (!impl || !impl->connected || !data || !length) return;
+#if defined(RTB_X18_FIRST_PRINT_LOG)
+  Serial.print("[RX] len=");
+  Serial.print(static_cast<unsigned>(length));
+  Serial.print(" hex=");
+  for (size_t i = 0; i < length; ++i) {
+    if (data[i] < 0x10) Serial.print('0');
+    Serial.print(data[i], HEX);
+  }
+  Serial.println();
+#endif
   impl->rx.insert(impl->rx.end(), data, data + length);
   if (impl->callback) impl->callback(data, length);
 }
@@ -213,6 +231,26 @@ Result BleTransport::write(const uint8_t* data, size_t len, size_t& written) {
   written = 0;
   if (!impl_->connected || !impl_->write_char) return Result::NotConnected;
   if (!data || len == 0) return Result::InvalidArgument;
+#if defined(RTB_X18_FIRST_PRINT_LOG)
+  const bool framed = len >= 8 && data[0] == 0x51 && data[1] == 0x78;
+  Serial.print("[TX] len=");
+  Serial.print(static_cast<unsigned>(len));
+  if (framed) {
+    Serial.print(" op=");
+    if (data[2] < 0x10) Serial.print('0');
+    Serial.print(data[2], HEX);
+    // Full hex for control frames; rows only get opcode+length to avoid
+    // flooding UART at 115200 and perturbing the 10 ms row pacing.
+    if (data[2] != 0xA2) {
+      Serial.print(" hex=");
+      for (size_t i = 0; i < len; ++i) {
+        if (data[i] < 0x10) Serial.print('0');
+        Serial.print(data[i], HEX);
+      }
+    }
+  }
+  Serial.println();
+#endif
   size_t offset = 0;
   while (offset < len) {
     const size_t n = std::min(impl_->max_chunk, len - offset);
