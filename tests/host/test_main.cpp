@@ -332,8 +332,9 @@ static void testCatalogAndFingerprint() {
   CHECK(std::string(x18->notify_uuid) == "AE02");
   CHECK(x18->protocol_family == ProtocolFamily::TinyIPrint);
   CHECK(profileSupports(*x18, TransportKind::Ble));
-  CHECK(!x18->implemented);
-  // 384 is the first-print EXPERIMENTAL value, not a confirmed specification.
+  // 384 dots + implemented=true confirmed by the real-hardware power-cycle
+  // recovery test; X18 must be selectable by automatic discovery.
+  CHECK(x18->implemented);
   CHECK(x18->width_dots == 384);
   Endpoint x18_ep;
   x18_ep.kind = TransportKind::Ble;

@@ -17,5 +17,5 @@
   "feed_dots": 64,
   "row_delay_ms": 10,
   "write_chunk": 20,
-  "implemented": false
+  "implemented": true
 }

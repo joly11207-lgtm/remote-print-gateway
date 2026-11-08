@@ -1,18 +1,24 @@
 # Remote Thermal Printer Bridge V0.1
 
 ESP32-S3 based Wi-Fi -> BLE bridge for Tiny / iPrint / CatPrinter (AE30) thermal
-printers. V0.1 is a **compile-verified + Mock-tested architecture skeleton**.
+printers.
 
-**There is no physical printer and no ESP32-WROOM-32E board on the desk.**
-Nothing here claims a successful real print or a Classic Bluetooth validation.
-Current tag: **`v0.1.2-pre-hardware`** (2026-11-08: fixed the real N16R8 board
-`memory_type` from `opi_opi` to `qio_opi`; firmware flashed and boot/AP/HTTP/BLE
-verified on hardware). `v0.1.1-pre-hardware` is kept as the pre-hardware baseline
-that exposed the board-config error on its first real flash.
+Current tag: **`v0.1.5-x18-verified`** — X18 / 爱记星 is **real-hardware
+verified** on an ESP32-S3 N16R8: 10/10 consecutive prints, 384 dots, a
+power-cycle offline/auto-recovery print, 11 user-inspected sheets, 0 duplicates
+/ 0 lost jobs / 0 firmware reboots. `implemented=true`, `width_dots=384`.
+Historical dated sections below record earlier pre-hardware states and are kept
+for traceability; the top of this file is the current status.
 
-`v0.1.1-pre-hardware` (2026-11-07) covered callback lifetime, bounded bitmap
-rows, two-phase BLE discovery, `uncertain_partial` mid-job semantics and
-job_id-only dedup — no new features.
+**Not verified:** no ESP32-WROOM-32E board exists, so Classic Bluetooth / SPP
+remains architecture-only. Only the X18 printer was tested: other AE30/CatPrinter
+models, mid-job disconnect recovery (`uncertain_partial` on real paper), and OTA
+remain unverified.
+
+Tag history: `v0.1.1-pre-hardware` (2026-11-07 hotfix), `v0.1.2-pre-hardware`
+(N16R8 `opi_opi` -> `qio_opi` board fix), `v0.1.3-x18-protocol-confirmed`,
+`v0.1.4-x18-first-print`, `v0.1.5-x18-verified` (BLE scan lifecycle fix + full
+real-hardware validation). None were overwritten.
 
 ## NOW (V0.1)
 ESP32-S3, Wi-Fi, BLE, Tiny/iPrint, HTTP JSON debug API, local print queue,

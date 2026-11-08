@@ -102,6 +102,30 @@ struct BleTransport::Impl {
 namespace {
 BleTransport::Impl* g_active_impl = nullptr;  // single active BLE link in V0.1
 
+// Shared BLE controller + scanner setup, used by BOTH connect() and scan().
+//
+// Root cause of the "0 endpoints forever" defect: connect() used to mark the
+// transport as initialized without ever registering advertised-device
+// callbacks or scan parameters. When connect() was the FIRST BLE operation
+// after boot (which is exactly what the print path does), scan() then skipped
+// its whole configuration block, so no advertisement ever reached our
+// ScanCallbacks and every later /api/scan returned NOT_FOUND -- while
+// /api/connect kept working over the independent BLEClient path.
+//
+// Re-asserting the (idempotent) setters on every scan also restores the shared
+// GAP scanner state after a BLEClient connect/disconnect cycle.
+void ensureBleReady(BleTransport::Impl* impl) {
+  if (!impl->initialized) {
+    BLEDevice::init("RTB-V0.1");       // library guards against double init
+    impl->scan = BLEDevice::getScan();  // singleton, must not be deleted
+    impl->initialized = true;
+  }
+  impl->scan->setAdvertisedDeviceCallbacks(impl->scan_cb);
+  impl->scan->setActiveScan(true);
+  impl->scan->setInterval(100);
+  impl->scan->setWindow(99);
+}
+
 void notifyTrampoline(BLERemoteCharacteristic*, uint8_t* data, size_t length, bool) {
   BleTransport::Impl* impl = g_active_impl;
   if (!impl || !impl->connected || !data || !length) return;
@@ -142,24 +166,20 @@ bool BleTransport::notifySubscribed() const { return impl_->notify_subscribed; }
 
 Result BleTransport::scan(const ScanRequest& request, ScanResult& out) {
   out.endpoints.clear();
-  if (!impl_->initialized) {
-    BLEDevice::init("RTB-V0.1");
-    impl_->scan = BLEDevice::getScan();
-    impl_->scan->setAdvertisedDeviceCallbacks(impl_->scan_cb);
-    impl_->scan->setActiveScan(true);
-    impl_->scan->setInterval(100);
-    impl_->scan->setWindow(99);
-    impl_->initialized = true;
-  }
+  ensureBleReady(impl_);
   impl_->scan_results.clear();
   impl_->scan->clearResults();
 
   uint32_t seconds = request.duration_ms / 1000;
   if (seconds < 1) seconds = 1;
   if (seconds > 10) seconds = 10;
+  // start(seconds, false) is the BLOCKING overload: it waits for the GAP
+  // scan-complete event, which already sets m_stopped and gives the semaphore.
+  // Calling stop()/clearResults() afterwards issues esp_ble_gap_stop_scanning()
+  // on an inactive scan ("BTM_BleScan scan not active") and leaves an extra
+  // semaphore give, corrupting the next scan. Do NOT stop after a blocking
+  // start; just let the library finish its own scan lifecycle.
   impl_->scan->start(seconds, false);
-  impl_->scan->stop();
-  impl_->scan->clearResults();
 
   for (size_t i = 0; i < impl_->scan_results.size(); ++i) {
     const Endpoint& ep = impl_->scan_results[i];
@@ -176,11 +196,9 @@ Result BleTransport::scan(const ScanRequest& request, ScanResult& out) {
 
 Result BleTransport::connect(const Endpoint& endpoint) {
   if (endpoint.address.empty()) return Result::InvalidArgument;
-  if (!impl_->initialized) {
-    BLEDevice::init("RTB-V0.1");
-    impl_->scan = BLEDevice::getScan();
-    impl_->initialized = true;
-  }
+  // Must use the SAME initialization path as scan(): the scanner needs its
+  // callbacks/parameters even when connect is the first BLE operation.
+  ensureBleReady(impl_);
   if (!impl_->client) {
     impl_->client = BLEDevice::createClient();
     impl_->client->setClientCallbacks(impl_->client_cb);

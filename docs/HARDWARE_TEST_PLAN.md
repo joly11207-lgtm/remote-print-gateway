@@ -1,18 +1,40 @@
 # Hardware arrival test plan
 
-Trigger: the real CatPrinter / 喵喵机 (GB01-class) arrives. V0.1 currently has
-**no physical printer** and **no ESP32-WROOM-32E board**.
+Trigger: a real printer is available. **No ESP32-WROOM-32E board exists**, so
+all Classic Bluetooth / SPP items remain architecture-only.
 
-Status 2026-11-08: **board-only steps 0 and 1 were executed** on the real
-ESP32-S3 N16R8 (firmware flashed, boot/capabilities/AP/HTTP/BLE scanner
-verified). Everything involving an actual printer (sections 2-7, except the
-generic BLE scan smoke check) remains **unexecuted**. See
-`docs/V0.1_REPORT.md` for the recorded hardware run.
+Status 2026-11-08 (current tag `v0.1.5-x18-verified`): the first real printer,
+X18 / 爱记星, is **real-hardware verified** on an ESP32-S3 N16R8:
+- board steps 0-1 (boot, BoardCapabilities, Flash/PSRAM, AP, HTTP, BLE scan);
+- X18 protocol identification (A3 status, valid CRC), first minimal print;
+- 10/10 consecutive prints (640 bitmap rows, 10 feeds, 0 duplicates/reboots);
+- power-cycle offline waiting -> automatic re-discovery / reconnect / one
+  recovery print, user-inspected correct sheet.
+11 sheets total, all user-inspected correct. `width_dots=384`,
+`implemented=true`. See the A-I report in `docs/V0.1_REPORT.md`.
 
-This plan reflects `v0.1.2-pre-hardware`: two-phase discovery, bounded bitmap
+**Still unverified on real paper:** mid-job power loss (`uncertain_partial`),
+other AE30/CatPrinter models, WROOM-32E / Classic Bluetooth, OTA. These remain
+future work; deliberately not exercised in the validation round.
+
+This plan reflects `v0.1.5-x18-verified`: two-phase discovery, bounded bitmap
 rows, safe notification callback lifetime, `uncertain_partial` mid-job
-semantics, `job_id`-only dedup, and the real-hardware `s3_n16r8` memory type
-fix (`opi_opi` -> `qio_opi`). No feature/protocol/website work was added.
+semantics, `job_id`-only dedup, the real-hardware `s3_n16r8` memory type fix
+(`opi_opi` -> `qio_opi`), and the BLE scan-lifecycle fix. No feature/protocol/
+website work was added.
+
+## 0a. BLE scan lifecycle regression (real hardware only)
+`tests/hardware/scan_lifecycle_probe.py` (needs the board on `RTB-V0.1-AP` and
+at least one BLE advertiser). Host Mock tests CANNOT cover the ESP32 Bluedroid
+stack — do not report a Mock result as scan-lifecycle validation.
+1. `scan` x3 -> endpoints > 0.
+2. `/api/connect` -> `/api/disconnect` (no print).
+3. `scan` x3 -> still endpoints > 0.
+4. `scan` x4 -> still healthy.
+5. Cold boot with **connect as the FIRST BLE operation**, then scan: this
+   was the exact failing case (0 endpoints forever) and must now succeed.
+6. Printer OFF -> scan still sees OTHER BLE devices; printer ON -> X18 visible.
+Result 2026-11-08: PASS (all cases). `BTM_BleScan scan not active` count 0.
 
 ## 0. Preconditions
 - ESP32-S3 N16R8 flashed with `s3_n16r8` build (`tools/build.ps1`).
