@@ -101,6 +101,7 @@ def check_static(server: Server) -> None:
             assert content_type.startswith("text/html"), (request_path, content_type)
             html = body.decode("utf-8")
             assert f'data-page="{page}"' in html, (request_path, page)
+            assert 'data-demo="1"' in html, (request_path, "explicit demo build marker")
             assert "Remote Print Gateway" in html, request_path
             assert 'src="/app.js"' in html and 'href="/styles.css"' in html, request_path
             assert "http://" not in html and "https://" not in html, request_path
@@ -224,6 +225,33 @@ def check_ui_copy() -> None:
         assert "http://" not in document and "https://" not in document
         assert "react" not in document.lower() and "vue" not in document.lower()
     print(f"  {len(required)} required copy strings, no force-test paths, no external assets")
+
+
+def check_deploy_copy() -> None:
+    section("production copy: profile facts, brand-neutral setup, demo fallback")
+
+    pages = {route: (WEB_DIR / name).read_text(encoding="utf-8") for route, (name, _p) in PAGES.items()}
+    source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    # G2D is a Bluetooth Classic / SPP printer in gateway/profiles/memobird_g2d.json.
+    compatibility = pages["/compatibility"]
+    assert "Bluetooth Classic · Memobird" in compatibility
+    assert "Bluetooth LE · Memobird" not in compatibility
+
+    # Setup must not pin the product to one specific MCU.
+    assert "Plug your Gateway board into USB" in pages["/setup"]
+    for html in pages.values():
+        assert "ESP32" not in html, "the website must not name the ESP32-S3"
+
+    # A static deployment has no engine: that state is demo copy, not an error.
+    assert "Gateway simulator ready" in source
+    assert "This deployment is not connected to a real Gateway." in source
+    assert "const DEMO_BUILD = document.body.dataset.demo === '1';" in source
+    assert "DEMO_BUILD && noBackend(error)" in source
+    # Genuine failures keep the error path.
+    assert "showError($('gateway-error'), error)" in source
+    assert "error.code === 'BACKEND_UNAVAILABLE' ? 'Gateway service offline'" in source
+    print("  G2D = Bluetooth Classic, setup is brand-neutral, demo fallback is gated")
 
 
 def check_dom_wiring() -> None:
@@ -412,6 +440,7 @@ def main() -> int:
         check_referenced_paths(server)
         check_dom_wiring()
         check_ui_copy()
+        check_deploy_copy()
         check_vercel_config()
         check_ui_flow_x18(server)
         g2d_case = check_ui_flow_g2d(server)

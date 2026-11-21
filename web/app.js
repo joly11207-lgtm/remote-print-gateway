@@ -20,6 +20,10 @@ const DEFAULT_GATEWAY_ID = 'gw-sim-001';
 const DEV_MODE = new URLSearchParams(window.location.search).get('dev') === '1';
 // Set by <body data-page="...">. Every page loads this same file.
 const PAGE = document.body.dataset.page || 'home';
+// <body data-demo="1"> marks a build with no Python engine behind it. Only that
+// build may turn a missing API into a friendly demo state; a real deployment
+// still reports every failure as an error.
+const DEMO_BUILD = document.body.dataset.demo === '1';
 
 // Presentation labels only. The values themselves stay canonical from the API.
 const TRANSPORT_LABELS = {
@@ -89,14 +93,28 @@ async function api(method, path, body) {
     error.status = 0;
     throw error;
   }
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error(data.message || `Request failed (${response.status})`);
-    error.code = data.error || `HTTP_${response.status}`;
+    // A static host answers /api/* with HTML (404 on Vercel, 501 from a plain
+    // file server): there is no engine on this origin at all. A real engine
+    // always answers JSON, so a non-JSON body is a deployment fact, not a
+    // failed request.
+    const noBackend = data === null;
+    const error = new Error(
+      noBackend
+        ? 'No gateway service on this origin.'
+        : (data && data.message) || `Request failed (${response.status})`
+    );
+    error.code = noBackend ? 'NO_BACKEND' : (data && data.error) || `HTTP_${response.status}`;
     error.status = response.status;
     throw error;
   }
-  return data;
+  return data || {};
+}
+
+// True only when the absence of an engine explains the failure.
+function noBackend(error) {
+  return error.code === 'NO_BACKEND' || error.code === 'BACKEND_UNAVAILABLE';
 }
 
 function showError(node, error) {
@@ -137,6 +155,12 @@ async function loadGateway() {
     setBarStatus(gateway);
     renderGateway(gateway);
   } catch (error) {
+    // The demo build has no engine on purpose: say so instead of painting a red
+    // request error. Any other deployment keeps the real error path below.
+    if (DEMO_BUILD && noBackend(error)) {
+      renderDemoGateway();
+      return;
+    }
     state.gateway = null;
     setBarStatus(null);
     const name = $('gateway-name');
@@ -147,6 +171,42 @@ async function loadGateway() {
       showError($('gateway-error'), error);
     }
   }
+}
+
+// Static preview: there is no gateway to report on, and pretending otherwise
+// would make a demo look like a real installation.
+function renderDemoGateway() {
+  state.gateway = null;
+  setDemoBarStatus();
+  const name = $('gateway-name');
+  if (!name) return;  // the bar already carries the state
+
+  name.textContent = 'Gateway simulator ready';
+  $('gateway-place').textContent = 'This deployment is not connected to a real Gateway.';
+
+  const badge = $('gateway-status');
+  badge.textContent = 'Demo';
+  badge.className = 'badge is-demo';
+
+  clearError($('gateway-error'));
+
+  $('gateway-facts').replaceChildren(
+    fact('Firmware', 'Demo build'),
+    fact('Hardware', 'No real Gateway'),
+    fact('Last seen', '—'),
+    fact('Gateway ID', 'demo')
+  );
+  $('gateway-caps').replaceChildren(
+    h('span', { class: 'chip', text: 'Simulator' }),
+    h('span', { class: 'chip', text: 'No engine' })
+  );
+}
+
+function setDemoBarStatus() {
+  const node = $('bar-gateway');
+  if (!node) return;
+  node.textContent = 'Gateway: simulator ready';
+  node.className = 'bar-status is-demo';
 }
 
 function setBarStatus(gateway) {
@@ -359,6 +419,12 @@ function retryScan(button) {
 }
 
 function renderScanError(error) {
+  // Same rule as the gateway card: only the demo build may soften a missing
+  // engine. Every other failure keeps its own message.
+  if (DEMO_BUILD && noBackend(error)) {
+    $('result').replaceChildren(demoBackendCard());
+    return;
+  }
   const gatewayDown = ['GATEWAY_OFFLINE', 'GATEWAY_TIMEOUT', 'GATEWAY_INVALID_RESPONSE'].includes(
     error.code
   );
@@ -371,6 +437,19 @@ function renderScanError(error) {
     return;
   }
   showError($('form-error'), error);
+}
+
+function demoBackendCard() {
+  return h(
+    'section',
+    { class: 'card result result-wait' },
+    h('p', { class: 'headline', text: 'Demo build' }),
+    h('h2', { text: 'The compatibility engine is not part of this deployment.' }),
+    h('p', {
+      text:
+        'This static preview shows the flow, but a scan needs the Gateway service. Nothing was checked and nothing was added.',
+    })
+  );
 }
 
 function gatewayOfflineCard(error) {

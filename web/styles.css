@@ -122,6 +122,7 @@ main {
 
 .badge.is-online { background: var(--ok-soft); color: var(--ok); }
 .badge.is-offline { background: var(--stop-soft); color: var(--stop); }
+.badge.is-demo { background: #eaf1ff; color: var(--brand); }
 
 .facts {
   display: grid;
@@ -592,6 +593,7 @@ details.advanced td:first-child {
 
 .bar-status.is-online { background: var(--ok-soft); color: var(--ok); }
 .bar-status.is-offline { background: var(--stop-soft); color: var(--stop); }
+.bar-status.is-demo { background: #eaf1ff; color: var(--brand); }
 
 .page-head {
   margin: 4px 0 0;
