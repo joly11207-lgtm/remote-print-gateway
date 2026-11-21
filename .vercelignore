@@ -1,0 +1,13 @@
+# The Vercel deployment is the static site in web/ only.
+# Everything below stays in the repository but is not uploaded.
+src/
+tests/
+docs/
+patches/
+boards/
+build_logs/
+gateway/
+tools/
+platformio.ini
+requirements.txt
+*.md
