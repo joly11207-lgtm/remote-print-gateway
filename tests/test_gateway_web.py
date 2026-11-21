@@ -102,6 +102,9 @@ def check_static(server: Server) -> None:
             html = body.decode("utf-8")
             assert f'data-page="{page}"' in html, (request_path, page)
             assert 'data-demo="1"' in html, (request_path, "explicit demo build marker")
+            assert 'src="/i18n.js"' in html, request_path
+            assert 'id="lang-switch"' in html, request_path
+            assert '<option value="en">' in html and '<option value="zh-CN">' in html, request_path
             assert "Remote Print Gateway" in html, request_path
             assert 'src="/app.js"' in html and 'href="/styles.css"' in html, request_path
             assert "http://" not in html and "https://" not in html, request_path
@@ -110,6 +113,7 @@ def check_static(server: Server) -> None:
 
     for path, expected_type, expected_text in (
         ("/app.js", "application/javascript", "compatibility/cases"),
+        ("/i18n.js", "application/javascript", "I18N_MESSAGES"),
         ("/styles.css", "text/css", ":root"),
     ):
         status, content_type, body = server.get(path)
@@ -177,13 +181,71 @@ def check_referenced_paths(server: Server) -> None:
         print(f"    {path}")
 
 
-def check_ui_copy() -> None:
+MESSAGES = re.compile(r"const I18N_MESSAGES = (\{.*?\n\});", re.S)
+
+
+def load_messages() -> dict:
+    source = (WEB_DIR / "i18n.js").read_text(encoding="utf-8")
+    match = MESSAGES.search(source)
+    assert match, "i18n.js has no I18N_MESSAGES literal"
+    return json.loads(match.group(1))
+
+
+def check_i18n(messages: dict) -> None:
+    section("i18n: two languages, every binding resolves, nothing missing")
+
+    assert set(messages) == {"en", "zh-CN"}, sorted(messages)
+    en, zh = messages["en"], messages["zh-CN"]
+    only_en = sorted(set(en) - set(zh))
+    only_zh = sorted(set(zh) - set(en))
+    assert not only_en and not only_zh, f"key mismatch: en-only={only_en} zh-only={only_zh}"
+    empty = sorted(key for key in en if not str(en[key]).strip() or not str(zh[key]).strip())
+    assert not empty, f"empty translations: {empty}"
+
+    bound = {}
+    for route, (name, _page) in PAGES.items():
+        html = (WEB_DIR / name).read_text(encoding="utf-8")
+        for attr in ("data-i18n", "data-i18n-placeholder", "data-i18n-aria"):
+            for key in re.findall(rf'{attr}="([^"]+)"', html):
+                bound.setdefault(key, set()).add(route)
+    missing = sorted(key for key in bound if key not in en)
+    assert not missing, f"markup binds keys that do not exist: {missing}"
+
+    source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    used = set(re.findall(r"I18N\.t\('([^']+)'", source))
+    used |= set(re.findall(r"^\s*\['(dyn\.[\w.]+)',", source, re.M))
+    assert used, "app.js never calls I18N.t()"
+    missing_dynamic = sorted(key for key in used if key not in en)
+    assert not missing_dynamic, f"app.js uses keys that do not exist: {missing_dynamic}"
+
+    # No page may show a raw key as visible text.
+    for route, (name, _page) in PAGES.items():
+        html = (WEB_DIR / name).read_text(encoding="utf-8")
+        text = re.sub(r"<[^>]+>", " ", html)
+        raw = [key for key in en if key in text]
+        assert not raw, f"{route} shows a raw i18n key: {raw[:3]}"
+
+    # The switcher exists, remembers the choice, and keeps <html lang> in sync.
+    i18n = (WEB_DIR / "i18n.js").read_text(encoding="utf-8")
+    assert "localStorage" in i18n and "'rtg.lang'" in i18n, "no persisted preference"
+    assert "SUPPORTED = ['en', 'zh-CN']" in i18n
+    assert "document.documentElement.setAttribute('lang', current)" in i18n
+    assert "rtg:langchange" in source, "dynamic content would not follow a language switch"
+    print(
+        f"  {len(en)} keys x 2 languages, {len(bound)} static bindings, "
+        f"{len(used)} dynamic keys"
+    )
+
+
+def check_ui_copy(messages: dict) -> None:
     section("consumer copy + no escape hatches in the UI source")
 
     source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    i18n = (WEB_DIR / "i18n.js").read_text(encoding="utf-8")
     html = "\n".join(
         (WEB_DIR / name).read_text(encoding="utf-8") for name, _page in PAGES.values()
     )
+    blob = "\n".join(str(value) for value in messages["en"].values()) + "\n" + html
 
     required = [
         "Good news — your printer looks compatible.",
@@ -198,11 +260,11 @@ def check_ui_copy() -> None:
         "Demo / Simulator",
         "Coming soon",
     ]
-    missing = [text for text in required if text not in source + html]
+    missing = [text for text in required if text not in blob]
     assert not missing, f"missing UI copy: {missing}"
 
     forbidden = ["force test", "Force test", "Try anyway", "Send command", "send command"]
-    found = [text for text in forbidden if text in source]
+    found = [text for text in forbidden if text in source + i18n]
     assert not found, f"UI must not offer these: {found}"
 
     # The test button may only be produced when the engine says it is executable.
@@ -217,21 +279,22 @@ def check_ui_copy() -> None:
     # gateway address. It only asks this origin which gateway to use.
     assert "outcome:" not in source, "the UI must not send a test outcome"
     assert "mode === 'real'" in source, "the UI must prefer the real gateway"
-    assert "Gateway is offline" in source
-    assert "couldn't find your printer" in source
+    assert "Gateway is offline" in blob
+    assert "couldn't find your printer" in blob
 
     # No framework, no CDN, no build step: everything comes from this origin.
-    for document in (source, html):
+    for document in (source, i18n, html):
         assert "http://" not in document and "https://" not in document
         assert "react" not in document.lower() and "vue" not in document.lower()
     print(f"  {len(required)} required copy strings, no force-test paths, no external assets")
 
 
-def check_deploy_copy() -> None:
+def check_deploy_copy(messages: dict) -> None:
     section("production copy: profile facts, brand-neutral setup, demo fallback")
 
     pages = {route: (WEB_DIR / name).read_text(encoding="utf-8") for route, (name, _p) in PAGES.items()}
     source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    blob = "\n".join(str(value) for value in messages["en"].values())
 
     # G2D is a Bluetooth Classic / SPP printer in gateway/profiles/memobird_g2d.json.
     compatibility = pages["/compatibility"]
@@ -239,18 +302,19 @@ def check_deploy_copy() -> None:
     assert "Bluetooth LE · Memobird" not in compatibility
 
     # Setup must not pin the product to one specific MCU.
-    assert "Plug your Gateway board into USB" in pages["/setup"]
+    assert "Plug your Gateway board into USB" in blob
+    assert "网关板" in messages["zh-CN"]["setup.step1.body"]
     for html in pages.values():
         assert "ESP32" not in html, "the website must not name the ESP32-S3"
 
     # A static deployment has no engine: that state is demo copy, not an error.
-    assert "Gateway simulator ready" in source
-    assert "This deployment is not connected to a real Gateway." in source
+    assert "Gateway simulator ready" in blob
+    assert "This deployment is not connected to a real Gateway." in blob
     assert "const DEMO_BUILD = document.body.dataset.demo === '1';" in source
     assert "DEMO_BUILD && noBackend(error)" in source
     # Genuine failures keep the error path.
     assert "showError($('gateway-error'), error)" in source
-    assert "error.code === 'BACKEND_UNAVAILABLE' ? 'Gateway service offline'" in source
+    assert "error.code === 'BACKEND_UNAVAILABLE'" in source
     print("  G2D = Bluetooth Classic, setup is brand-neutral, demo fallback is gated")
 
 
@@ -432,6 +496,7 @@ def check_dev_gating(case_id: str) -> None:
 
 def main() -> int:
     db.initialize()
+    messages = load_messages()
     server = Server()
     try:
         check_static(server)
@@ -439,8 +504,9 @@ def main() -> int:
         check_page_dispatch()
         check_referenced_paths(server)
         check_dom_wiring()
-        check_ui_copy()
-        check_deploy_copy()
+        check_i18n(messages)
+        check_ui_copy(messages)
+        check_deploy_copy(messages)
         check_vercel_config()
         check_ui_flow_x18(server)
         g2d_case = check_ui_flow_g2d(server)

@@ -595,6 +595,20 @@ details.advanced td:first-child {
 .bar-status.is-offline { background: var(--stop-soft); color: var(--stop); }
 .bar-status.is-demo { background: #eaf1ff; color: var(--brand); }
 
+/* Language switcher: compact enough to share the bar with the nav. */
+.lang-switch {
+  flex: none;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lang-switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
 .page-head {
   margin: 4px 0 0;
 }
@@ -773,6 +787,17 @@ details.advanced td:first-child {
   .site-bar .wrap { flex-wrap: wrap; gap: 8px; padding: 8px 0; }
   /* flex-basis wins over width here, so give the nav a full row explicitly. */
   .site-nav { order: 3; flex: 0 0 100%; width: 100%; }
+}
+
+@media (max-width: 560px) {
+  /* Keep the bar to two rows on a phone: brand + language + status, then nav.
+     The Add Printer shortcut is redundant here (the Printers page and the home
+     tile both link to it), and hiding it stops the row from crushing. */
+  .site-bar .wrap { gap: 6px; }
+  .site-bar .btn.ghost { display: none; }
+  .brand { font-size: 13.5px; }
+  .lang-switch { padding: 4px 6px; font-size: 12px; }
+  .bar-status { padding: 3px 8px; font-size: 11px; }
 }
 
 @media (max-width: 480px) {

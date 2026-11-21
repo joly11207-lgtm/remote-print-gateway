@@ -12,75 +12,76 @@
 <header class="site-bar">
   <div class="wrap wide">
     <a class="brand" href="/">Remote Print Gateway</a>
-    <nav class="site-nav" aria-label="Sections">
-      <a href="/">Home</a>
-      <a href="/setup">Setup</a>
-      <a href="/printers">Printers</a>
-      <a href="/lab">Lab</a>
-      <a href="/print">Print</a>
-      <a href="/compatibility" class="is-active">Compatibility</a>
+    <nav class="site-nav" aria-label="Sections" data-i18n-aria="nav.aria">
+      <a href="/" data-i18n="nav.home">Home</a>
+      <a href="/setup" data-i18n="nav.setup">Setup</a>
+      <a href="/printers" data-i18n="nav.printers">Printers</a>
+      <a href="/lab" data-i18n="nav.lab">Lab</a>
+      <a href="/print" data-i18n="nav.print">Print</a>
+      <a href="/compatibility" class="is-active" data-i18n="nav.compatibility">Compatibility</a>
     </nav>
-    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <select id="lang-switch" class="lang-switch" aria-label="Language" data-i18n-aria="lang.label">
+      <option value="en">English</option>
+      <option value="zh-CN">简体中文</option>
+    </select>
+    <a class="btn ghost" href="/printers/add" data-i18n="nav.addPrinter">Add Printer</a>
     <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
   </div>
 </header>
 
 <main class="wrap wide">
   <div class="page-head">
-    <h1>Compatibility Library</h1>
-    <p>What this Gateway can talk to today, and where the gaps are. Status is decided by the
-       Gateway, not by this page.</p>
+    <h1 data-i18n="compat.title">Compatibility Library</h1>
+    <p data-i18n="compat.lede">What this Gateway can talk to today, and where the gaps are. Status is decided by the Gateway, not by this page.</p>
   </div>
 
   <p class="note">
-    <strong>Demo / Simulator.</strong> Entries describe the shipped profiles; the scans you run
-    here use simulated fixtures, not real hardware.
+    <strong data-i18n="common.demoTag">Demo / Simulator.</strong>
+    <span data-i18n="compat.demoBody">Entries describe the shipped profiles; the scans you run here use simulated fixtures, not real hardware.</span>
   </p>
 
   <div class="page-grid three">
     <section class="card">
       <h2>爱记星 X18</h2>
       <p class="muted">Bluetooth LE · Tiny / iPrint</p>
-      <p>Supported. Scans as compatible and the safe test can be executed by the Gateway.</p>
-      <p class="note">Profile status: ready</p>
+      <p data-i18n="compat.x18.body">Supported. Scans as compatible and the safe test can be executed by the Gateway.</p>
+      <p class="note" data-i18n="compat.x18.status">Profile status: ready</p>
     </section>
 
     <section class="card">
       <h2>MEMOBIRD G2D</h2>
       <p class="muted">Bluetooth Classic · Memobird</p>
-      <p>Recognized, but this Gateway firmware cannot talk to it yet. No test is offered until a
-         compatible firmware release is installed.</p>
-      <p class="note">Profile status: waiting for firmware</p>
+      <p data-i18n="compat.g2d.body">Recognized, but this Gateway firmware cannot talk to it yet. No test is offered until a compatible firmware release is installed.</p>
+      <p class="note" data-i18n="compat.g2d.status">Profile status: waiting for firmware</p>
     </section>
 
     <section class="card">
-      <h2>Unknown printer</h2>
-      <p class="muted">Brand / model only</p>
-      <p>We record what you tell us and check the evidence. If it is not strong enough, nothing is
-         tested and nothing is added.</p>
-      <p class="note">Profile status: needs more evidence</p>
+      <h2 data-i18n="compat.unknown.title">Unknown printer</h2>
+      <p class="muted" data-i18n="compat.unknown.meta">Brand / model only</p>
+      <p data-i18n="compat.unknown.body">We record what you tell us and check the evidence. If it is not strong enough, nothing is tested and nothing is added.</p>
+      <p class="note" data-i18n="compat.unknown.status">Profile status: needs more evidence</p>
     </section>
   </div>
 
   <section class="card">
-    <h2>Not on the list?</h2>
-    <p>Run the compatibility rescue flow: tell us the brand and model, and we check what the
-       Gateway can prove about it.</p>
+    <h2 data-i18n="compat.rescue.title">Not on the list?</h2>
+    <p data-i18n="compat.rescue.body">Run the compatibility rescue flow: tell us the brand and model, and we check what the Gateway can prove about it.</p>
     <div class="actions">
-      <a class="btn primary" href="/printers/add">Start compatibility check</a>
-      <a class="btn ghost" href="/lab">Inspect in the Lab</a>
+      <a class="btn primary" href="/printers/add" data-i18n="compat.rescue.cta1">Start compatibility check</a>
+      <a class="btn ghost" href="/lab" data-i18n="compat.rescue.cta2">Inspect in the Lab</a>
     </div>
   </section>
 
-  <p class="note">Coming soon — a per-printer detail page with firmware requirements and profile history.</p>
+  <p class="note" data-i18n="compat.coming">Coming soon — a per-printer detail page with firmware requirements and profile history.</p>
 </main>
 
 <footer class="site-footer">
   <div class="wrap wide">
-    <p>V1 preview — library entries are profile summaries, not hardware guarantees.</p>
+    <p data-i18n="compat.footer">V1 preview — library entries are profile summaries, not hardware guarantees.</p>
   </div>
 </footer>
 
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

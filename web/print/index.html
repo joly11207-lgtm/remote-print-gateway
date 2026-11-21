@@ -12,69 +12,74 @@
 <header class="site-bar">
   <div class="wrap wide">
     <a class="brand" href="/">Remote Print Gateway</a>
-    <nav class="site-nav" aria-label="Sections">
-      <a href="/">Home</a>
-      <a href="/setup">Setup</a>
-      <a href="/printers">Printers</a>
-      <a href="/lab">Lab</a>
-      <a href="/print" class="is-active">Print</a>
-      <a href="/compatibility">Compatibility</a>
+    <nav class="site-nav" aria-label="Sections" data-i18n-aria="nav.aria">
+      <a href="/" data-i18n="nav.home">Home</a>
+      <a href="/setup" data-i18n="nav.setup">Setup</a>
+      <a href="/printers" data-i18n="nav.printers">Printers</a>
+      <a href="/lab" data-i18n="nav.lab">Lab</a>
+      <a href="/print" class="is-active" data-i18n="nav.print">Print</a>
+      <a href="/compatibility" data-i18n="nav.compatibility">Compatibility</a>
     </nav>
-    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <select id="lang-switch" class="lang-switch" aria-label="Language" data-i18n-aria="lang.label">
+      <option value="en">English</option>
+      <option value="zh-CN">简体中文</option>
+    </select>
+    <a class="btn ghost" href="/printers/add" data-i18n="nav.addPrinter">Add Printer</a>
     <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
   </div>
 </header>
 
 <main class="wrap wide">
   <div class="page-head">
-    <h1>Print</h1>
-    <p>Choose a printer, choose what to send, then print. Printing is not connected in this build.</p>
+    <h1 data-i18n="print.title">Print</h1>
+    <p data-i18n="print.lede">Choose a printer, choose what to send, then print. Printing is not connected in this build.</p>
   </div>
 
   <p class="note">
-    <strong>Coming soon.</strong> No print backend is wired up in this preview: the controls below
-    are inert on purpose, and no job is queued.
+    <strong data-i18n="common.comingSoonTag">Coming soon.</strong>
+    <span data-i18n="print.comingSoon">No print backend is wired up in this preview: the controls below are inert on purpose, and no job is queued.</span>
   </p>
 
   <section class="card">
-    <h2>Choose printer</h2>
+    <h2 data-i18n="print.printer.title">Choose printer</h2>
     <label class="field">
-      <span>Printer</span>
+      <span data-i18n="print.printer.label">Printer</span>
       <select disabled>
-        <option>No printer added</option>
+        <option data-i18n="print.printer.empty">No printer added</option>
       </select>
     </label>
-    <p class="note">Add a printer first — the compatibility check must pass before printing.</p>
+    <p class="note" data-i18n="print.printer.note">Add a printer first — the compatibility check must pass before printing.</p>
     <div class="actions">
-      <a class="btn primary" href="/printers/add">Add Printer</a>
+      <a class="btn primary" href="/printers/add" data-i18n="nav.addPrinter">Add Printer</a>
     </div>
   </section>
 
   <section class="card">
-    <h2>Content</h2>
+    <h2 data-i18n="print.content.title">Content</h2>
     <div class="segmented" role="group" aria-label="Content type">
-      <button class="segment" type="button" disabled>Text</button>
-      <button class="segment" type="button" disabled>Image</button>
-      <button class="segment" type="button" disabled>File</button>
+      <button class="segment" type="button" disabled data-i18n="print.content.text">Text</button>
+      <button class="segment" type="button" disabled data-i18n="print.content.image">Image</button>
+      <button class="segment" type="button" disabled data-i18n="print.content.file">File</button>
     </div>
-    <p class="note">Coming soon — Text, Image and File input are not implemented.</p>
+    <p class="note" data-i18n="print.content.note">Coming soon — Text, Image and File input are not implemented.</p>
   </section>
 
   <section class="card">
-    <h2>Send</h2>
+    <h2 data-i18n="print.send.title">Send</h2>
     <div class="actions">
-      <button class="btn primary" type="button" disabled>Print</button>
+      <button class="btn primary" type="button" disabled data-i18n="print.send.button">Print</button>
     </div>
-    <p class="note">Not available — printing is a next-phase feature.</p>
+    <p class="note" data-i18n="print.send.note">Not available — printing is a next-phase feature.</p>
   </section>
 </main>
 
 <footer class="site-footer">
   <div class="wrap wide">
-    <p>V1 preview — no print job is sent from this page.</p>
+    <p data-i18n="print.footer">V1 preview — no print job is sent from this page.</p>
   </div>
 </footer>
 
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

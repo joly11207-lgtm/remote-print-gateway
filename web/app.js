@@ -52,7 +52,9 @@ const state = {
   gateway: null,
   caseId: null,
   report: null,
+  notice: null,
   device: null,
+  demo: false,  // true after the "simulator ready" fallback rendered
 };
 
 const $ = (id) => document.getElementById(id);
@@ -88,7 +90,7 @@ async function api(method, path, body) {
   } catch (cause) {
     // Static hosting without the gateway service (e.g. a bare Vercel preview):
     // the page must still render, it just cannot ask the engine anything.
-    const error = new Error('The gateway service is not reachable from this page.');
+    const error = new Error(I18N.t('dyn.error.backendUnavailable'));
     error.code = 'BACKEND_UNAVAILABLE';
     error.status = 0;
     throw error;
@@ -102,8 +104,8 @@ async function api(method, path, body) {
     const noBackend = data === null;
     const error = new Error(
       noBackend
-        ? 'No gateway service on this origin.'
-        : (data && data.message) || `Request failed (${response.status})`
+        ? I18N.t('dyn.error.noBackend')
+        : (data && data.message) || I18N.t('dyn.error.requestFailed', { status: response.status })
     );
     error.code = noBackend ? 'NO_BACKEND' : (data && data.error) || `HTTP_${response.status}`;
     error.status = response.status;
@@ -152,6 +154,7 @@ async function loadGateway() {
   try {
     const gateway = await discoverGateway();
     state.gateway = gateway;
+    state.demo = false;
     setBarStatus(gateway);
     renderGateway(gateway);
   } catch (error) {
@@ -167,7 +170,9 @@ async function loadGateway() {
     if (name) {
       // Offline is a Gateway fact, never a printer verdict.
       name.textContent =
-        error.code === 'BACKEND_UNAVAILABLE' ? 'Gateway service offline' : 'Gateway unavailable';
+        error.code === 'BACKEND_UNAVAILABLE'
+          ? I18N.t('dyn.gateway.offlineTitle')
+          : I18N.t('dyn.gateway.unavailableTitle');
       showError($('gateway-error'), error);
     }
   }
@@ -177,35 +182,36 @@ async function loadGateway() {
 // would make a demo look like a real installation.
 function renderDemoGateway() {
   state.gateway = null;
+  state.demo = true;
   setDemoBarStatus();
   const name = $('gateway-name');
   if (!name) return;  // the bar already carries the state
 
-  name.textContent = 'Gateway simulator ready';
-  $('gateway-place').textContent = 'This deployment is not connected to a real Gateway.';
+  name.textContent = I18N.t('dyn.gateway.demoTitle');
+  $('gateway-place').textContent = I18N.t('dyn.gateway.demoPlace');
 
   const badge = $('gateway-status');
-  badge.textContent = 'Demo';
+  badge.textContent = I18N.t('dyn.gateway.demoBadge');
   badge.className = 'badge is-demo';
 
   clearError($('gateway-error'));
 
   $('gateway-facts').replaceChildren(
-    fact('Firmware', 'Demo build'),
-    fact('Hardware', 'No real Gateway'),
-    fact('Last seen', '—'),
-    fact('Gateway ID', 'demo')
+    fact(I18N.t('dyn.fact.firmware'), I18N.t('dyn.gateway.demoFirmware')),
+    fact(I18N.t('dyn.fact.hardware'), I18N.t('dyn.gateway.demoHardware')),
+    fact(I18N.t('dyn.fact.lastSeen'), '—'),
+    fact(I18N.t('dyn.fact.gatewayId'), 'demo')
   );
   $('gateway-caps').replaceChildren(
-    h('span', { class: 'chip', text: 'Simulator' }),
-    h('span', { class: 'chip', text: 'No engine' })
+    h('span', { class: 'chip', text: I18N.t('dyn.gateway.demoChip') }),
+    h('span', { class: 'chip', text: I18N.t('dyn.gateway.demoChip2') })
   );
 }
 
 function setDemoBarStatus() {
   const node = $('bar-gateway');
   if (!node) return;
-  node.textContent = 'Gateway: simulator ready';
+  node.textContent = I18N.t('bar.demo');
   node.className = 'bar-status is-demo';
 }
 
@@ -215,9 +221,10 @@ function setBarStatus(gateway) {
   const online = Boolean(gateway) && gateway.status === 'online';
   // Never let a simulator look like a real board: the bar says so explicitly.
   const simulated = Boolean(gateway) && gateway.mode !== 'real';
-  node.textContent = `Gateway: ${gateway ? gateway.status : 'offline'}${
-    simulated ? ' · simulator' : ''
-  }`;
+  const status = I18N.t(online ? 'dyn.gateway.online' : 'dyn.gateway.offline');
+  node.textContent = simulated
+    ? I18N.t('bar.simulator', { status })
+    : I18N.t('bar.gateway', { status });
   node.className = `bar-status is-${online ? 'online' : 'offline'}`;
 }
 
@@ -229,13 +236,14 @@ function renderGateway(gateway) {
   $('gateway-place').textContent = gateway.hardware_family;
 
   const badge = $('gateway-status');
-  badge.textContent = gateway.status;
+  badge.textContent = I18N.t(
+    gateway.status === 'online' ? 'dyn.gateway.online' : 'dyn.gateway.offline'
+  );
   badge.className = `badge is-${gateway.status === 'online' ? 'online' : 'offline'}`;
 
   if (gateway.reachable === false) {
     showError($('gateway-error'), {
-      message:
-        'Gateway is offline. Check that it is powered on and on the same network, then reload this page.',
+      message: I18N.t('dyn.gateway.offlineMessage'),
       code: gateway.error,
     });
   } else {
@@ -244,10 +252,10 @@ function renderGateway(gateway) {
 
   const facts = $('gateway-facts');
   facts.replaceChildren(
-    fact('Firmware', gateway.firmware_version),
-    fact('Hardware', gateway.hardware_family),
-    fact('Last seen', formatTime(gateway.last_seen)),
-    fact('Gateway ID', gateway.gateway_id)
+    fact(I18N.t('dyn.fact.firmware'), gateway.firmware_version),
+    fact(I18N.t('dyn.fact.hardware'), gateway.hardware_family),
+    fact(I18N.t('dyn.fact.lastSeen'), formatTime(gateway.last_seen)),
+    fact(I18N.t('dyn.fact.gatewayId'), gateway.gateway_id)
   );
 
   const chips = $('gateway-caps');
@@ -260,7 +268,7 @@ function renderGateway(gateway) {
     )
   );
   if (!chips.children.length) {
-    chips.append(h('span', { class: 'chip', text: 'No capability reported' }));
+    chips.append(h('span', { class: 'chip', text: I18N.t('dyn.gateway.noCaps') }));
   }
 }
 
@@ -272,7 +280,7 @@ function formatTime(iso) {
   if (!iso) return '—';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString(I18N.lang, {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
@@ -443,12 +451,9 @@ function demoBackendCard() {
   return h(
     'section',
     { class: 'card result result-wait' },
-    h('p', { class: 'headline', text: 'Demo build' }),
-    h('h2', { text: 'The compatibility engine is not part of this deployment.' }),
-    h('p', {
-      text:
-        'This static preview shows the flow, but a scan needs the Gateway service. Nothing was checked and nothing was added.',
-    })
+    h('p', { class: 'headline', text: I18N.t('dyn.demoCard.headline') }),
+    h('h2', { text: I18N.t('dyn.demoCard.title') }),
+    h('p', { text: I18N.t('dyn.demoCard.body') })
   );
 }
 
@@ -456,14 +461,11 @@ function gatewayOfflineCard(error) {
   return h(
     'section',
     { class: 'card result result-blocked' },
-    h('p', { class: 'headline', text: 'Gateway offline' }),
-    h('h2', { text: 'Gateway is offline.' }),
-    h('p', {
-      text:
-        'Your printer was not checked. The Gateway did not answer the scan request, so we cannot say anything about this printer yet.',
-    }),
+    h('p', { class: 'headline', text: I18N.t('dyn.offlineCard.headline') }),
+    h('h2', { text: I18N.t('dyn.offlineCard.title') }),
+    h('p', { text: I18N.t('dyn.offlineCard.body') }),
     h('p', { class: 'note', text: error && error.code ? error.code : 'GATEWAY_OFFLINE' }),
-    h('div', { class: 'actions' }, retryButton('Try again'))
+    h('div', { class: 'actions' }, retryButton(I18N.t('dyn.btn.tryAgain')))
   );
 }
 
@@ -471,14 +473,11 @@ function printerNotFoundCard() {
   return h(
     'section',
     { class: 'card result result-wait' },
-    h('p', { class: 'headline', text: 'Not found' }),
-    h('h2', { text: "We couldn't find your printer." }),
-    h('p', {
-      text:
-        'Make sure the printer is switched on, close to the Gateway, and not connected to another phone or app.',
-    }),
-    h('p', { text: 'Nothing was added. You can scan again.' }),
-    h('div', { class: 'actions' }, retryButton('Scan again'))
+    h('p', { class: 'headline', text: I18N.t('dyn.notFound.headline') }),
+    h('h2', { text: I18N.t('dyn.notFound.title') }),
+    h('p', { text: I18N.t('dyn.notFound.body') }),
+    h('p', { text: I18N.t('dyn.notFound.body2') }),
+    h('div', { class: 'actions' }, retryButton(I18N.t('dyn.btn.scanAgain')))
   );
 }
 
@@ -536,6 +535,7 @@ function finishProgress() {
 // --------------------------------------------------------------------------- //
 function renderResult(report, notice) {
   state.report = report;
+  state.notice = notice || null;
   const host = $('result');
   const card = h('section', { class: 'card result' });
 
@@ -587,7 +587,11 @@ function printerLabel(report) {
   const profile = (report.candidates || []).find(
     (candidate) => candidate.profile_id === report.candidate_profile
   );
-  return (profile && profile.display_name) || report.candidate_profile || 'Your printer';
+  return (
+    (profile && profile.display_name) ||
+    report.candidate_profile ||
+    I18N.t('dyn.printerFallback')
+  );
 }
 
 function testButton(report) {
@@ -598,7 +602,7 @@ function testButton(report) {
       type: 'button',
       onclick: (event) => runSafeTest(event.currentTarget),
     },
-    'Test compatibility'
+    I18N.t('dyn.btn.test')
   );
 }
 
@@ -608,26 +612,23 @@ function readyView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Compatible' }),
-    h('h2', { text: 'Good news — your printer looks compatible.' }),
-    h('p', { text: 'We found a compatible printer profile.' }),
+    h('p', { class: 'headline', text: I18N.t('dyn.ready.headline') }),
+    h('h2', { text: I18N.t('dyn.ready.title') }),
+    h('p', { text: I18N.t('dyn.ready.body') }),
     h('span', { class: 'printer-name', text: printerLabel(report) }),
     h(
       'dl',
       { class: 'summary' },
-      h('dt', { text: 'Printer' }),
+      h('dt', { text: I18N.t('dyn.ready.printer') }),
       h('dd', { text: printerLabel(report) }),
-      h('dt', { text: 'Gateway' }),
-      h('dd', { text: 'Ready' })
+      h('dt', { text: I18N.t('dyn.ready.gateway') }),
+      h('dd', { text: I18N.t('dyn.ready.gatewayReady') })
     ),
-    h('p', { text: 'No Gateway software update is required.' }),
+    h('p', { text: I18N.t('dyn.ready.noUpdate') }),
     h('div', { class: 'actions' }, executable ? testButton(report) : null),
     executable
       ? null
-      : h('p', {
-          class: 'note',
-          text: 'This printer cannot be tested on this Gateway yet.',
-        })
+      : h('p', { class: 'note', text: I18N.t('dyn.ready.notTestable') })
   );
 }
 
@@ -636,15 +637,10 @@ function passedView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Test passed' }),
-    h('h2', { text: 'Compatibility test passed.' }),
-    h('p', { text: 'Your printer is ready to add.' }),
-    run.simulated
-      ? h('p', {
-          class: 'note',
-          text: 'Development mode: this test was simulated. No printer was touched.',
-        })
-      : null,
+    h('p', { class: 'headline', text: I18N.t('dyn.passed.headline') }),
+    h('h2', { text: I18N.t('dyn.passed.title') }),
+    h('p', { text: I18N.t('dyn.passed.body') }),
+    run.simulated ? h('p', { class: 'note', text: I18N.t('dyn.passed.simulated') }) : null,
     h(
       'div',
       { class: 'actions' },
@@ -655,7 +651,7 @@ function passedView(report) {
           type: 'button',
           onclick: (event) => completePrinter(event.currentTarget),
         },
-        'Add Printer'
+        I18N.t('dyn.btn.addPrinter')
       )
     )
   );
@@ -668,14 +664,11 @@ function testFailedView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Test not passed' }),
-    h('h2', { text: 'Compatibility test did not pass.' }),
-    h('p', {
-      text:
-        'The Gateway reached your printer, but the compatibility test did not come back cleanly.',
-    }),
-    reason ? h('p', { class: 'note', text: `Reason: ${reason}` }) : null,
-    h('p', { text: 'You can run the test again. Nothing was added yet.' }),
+    h('p', { class: 'headline', text: I18N.t('dyn.failed.headline') }),
+    h('h2', { text: I18N.t('dyn.failed.title') }),
+    h('p', { text: I18N.t('dyn.failed.body') }),
+    reason ? h('p', { class: 'note', text: I18N.t('dyn.failed.reason', { reason }) }) : null,
+    h('p', { text: I18N.t('dyn.failed.body2') }),
     h(
       'div',
       { class: 'actions' },
@@ -686,7 +679,7 @@ function testFailedView(report) {
           type: 'button',
           onclick: (event) => runSafeTest(event.currentTarget),
         },
-        'Test again'
+        I18N.t('dyn.btn.testAgain')
       )
     )
   );
@@ -696,17 +689,13 @@ function completedView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Added' }),
-    h('h2', { text: 'Printer added successfully.' }),
-    h('p', { text: `Printer ID: ${report.printer_id}` }),
+    h('p', { class: 'headline', text: I18N.t('dyn.added.headline') }),
+    h('h2', { text: I18N.t('dyn.added.title') }),
+    h('p', { text: I18N.t('dyn.added.printerId', { id: report.printer_id }) }),
     h(
       'div',
       { class: 'actions' },
-      h(
-        'button',
-        { class: 'btn ghost', type: 'button', onclick: resetFlow },
-        'Done'
-      )
+      h('button', { class: 'btn ghost', type: 'button', onclick: resetFlow }, I18N.t('dyn.btn.done'))
     )
   );
 }
@@ -715,20 +704,17 @@ function waitingView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Recognized' }),
-    h('h2', { text: 'We recognize this printer.' }),
+    h('p', { class: 'headline', text: I18N.t('dyn.waiting.headline') }),
+    h('h2', { text: I18N.t('dyn.waiting.title') }),
     h('span', { class: 'printer-name', text: printerLabel(report) }),
-    h('p', {
-      text:
-        'Your Gateway does not yet have the software needed to communicate with this printer.',
-    }),
-    h('p', {
-      text:
-        "We'll be able to add support through a Gateway update when a compatible firmware release is available.",
-    }),
+    h('p', { text: I18N.t('dyn.waiting.body1') }),
+    h('p', { text: I18N.t('dyn.waiting.body2') }),
     report.firmware_available && report.minimum_firmware_version
       ? h('p', {
-          text: `A Gateway update is available: ${report.minimum_firmware_version} (${report.firmware_channel}).`,
+          text: I18N.t('dyn.waiting.update', {
+            version: report.minimum_firmware_version,
+            channel: report.firmware_channel,
+          }),
         })
       : null,
     h(
@@ -741,7 +727,7 @@ function waitingView(report) {
           type: 'button',
           onclick: (event) => refreshCapability(event.currentTarget, false),
         },
-        'Check for compatibility update'
+        I18N.t('dyn.btn.checkUpdate')
       )
     ),
     devPanel(report)
@@ -752,16 +738,16 @@ function firmwareView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Gateway update needed' }),
-    h('h2', { text: 'This printer needs newer Gateway software.' }),
+    h('p', { class: 'headline', text: I18N.t('dyn.firmware.headline') }),
+    h('h2', { text: I18N.t('dyn.firmware.title') }),
     h('span', { class: 'printer-name', text: printerLabel(report) }),
-    h('p', {
-      text:
-        'The printer was recognized, but this Gateway version cannot talk to it yet.',
-    }),
+    h('p', { text: I18N.t('dyn.firmware.body') }),
     report.minimum_firmware_version
       ? h('p', {
-          text: `Available update: ${report.minimum_firmware_version} (${report.firmware_channel}).`,
+          text: I18N.t('dyn.firmware.available', {
+            version: report.minimum_firmware_version,
+            channel: report.firmware_channel,
+          }),
         })
       : null,
     h(
@@ -774,7 +760,7 @@ function firmwareView(report) {
           type: 'button',
           onclick: (event) => refreshCapability(event.currentTarget, false),
         },
-        'Check for compatibility update'
+        I18N.t('dyn.btn.checkUpdate')
       )
     ),
     devPanel(report)
@@ -785,12 +771,9 @@ function reviewView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Needs review' }),
-    h('h2', { text: 'We found a possible match, but it needs a closer look.' }),
-    h('p', {
-      text:
-        'We recorded your printer, but the evidence was not strong enough to test it automatically.',
-    }),
+    h('p', { class: 'headline', text: I18N.t('dyn.review.headline') }),
+    h('h2', { text: I18N.t('dyn.review.title') }),
+    h('p', { text: I18N.t('dyn.review.body') }),
     h('div', { class: 'actions' }, tryAgainButton())
   );
 }
@@ -799,13 +782,10 @@ function blockedView(report) {
   return h(
     'div',
     null,
-    h('p', { class: 'headline', text: 'Not identified' }),
-    h('h2', { text: "We couldn't safely identify this printer yet." }),
-    h('p', {
-      text:
-        'Your printer information has been recorded, but we don\'t have enough evidence to test it safely.',
-    }),
-    h('p', { text: 'Please check the brand/model information or try again later.' }),
+    h('p', { class: 'headline', text: I18N.t('dyn.blocked.headline') }),
+    h('h2', { text: I18N.t('dyn.blocked.title') }),
+    h('p', { text: I18N.t('dyn.blocked.body') }),
+    h('p', { text: I18N.t('dyn.blocked.body2') }),
     h('div', { class: 'actions' }, tryAgainButton())
   );
 }
@@ -814,7 +794,7 @@ function tryAgainButton() {
   return h(
     'button',
     { class: 'btn ghost', type: 'button', onclick: resetFlow },
-    'Try again'
+    I18N.t('dyn.btn.tryAgain')
   );
 }
 
@@ -865,12 +845,7 @@ async function refreshCapability(button, withSimulated) {
       body
     );
     const stillWaiting = report.status === 'WAITING_FIRMWARE' && !report.firmware_available;
-    renderResult(
-      report,
-      stillWaiting
-        ? 'Still waiting for a compatible Gateway update. Nothing has changed yet.'
-        : undefined
-    );
+    renderResult(report, stillWaiting ? I18N.t('dyn.refresh.waiting') : undefined);
   } catch (error) {
     if (button) button.disabled = false;
     renderResult(state.report, `${error.message} (${error.code})`);
@@ -884,7 +859,7 @@ function devPanel(report) {
   return h(
     'div',
     { class: 'dev-panel' },
-    h('p', { class: 'dev-label', text: 'Development fixtures' }),
+    h('p', { class: 'dev-label', text: I18N.t('dyn.dev.label') }),
     h(
       'div',
       { class: 'actions' },
@@ -895,7 +870,7 @@ function devPanel(report) {
           type: 'button',
           onclick: (event) => devInstallFixture(event.currentTarget),
         },
-        'Install simulated firmware fixture'
+        I18N.t('dyn.dev.install')
       ),
       h(
         'button',
@@ -904,7 +879,7 @@ function devPanel(report) {
           type: 'button',
           onclick: (event) => refreshCapability(event.currentTarget, true),
         },
-        'Refresh capability'
+        I18N.t('dyn.dev.refresh')
       ),
       h(
         'button',
@@ -913,15 +888,10 @@ function devPanel(report) {
           type: 'button',
           onclick: (event) => devGatewayUpgrade(event.currentTarget),
         },
-        'Simulate Gateway upgrade'
+        I18N.t('dyn.dev.upgrade')
       )
     ),
-    h('p', {
-      class: 'note',
-      text:
-        'Simulated firmware and the simulated Gateway upgrade exist for demos only. ' +
-        'They never reach a real printer.',
-    })
+    h('p', { class: 'note', text: I18N.t('dyn.dev.note') })
   );
 }
 
@@ -934,7 +904,7 @@ async function devInstallFixture(button) {
     button.disabled = false;
     renderResult(
       state.report,
-      `Development fixtures are unavailable: ${error.message} (${error.code})`
+      I18N.t('dyn.dev.unavailable', { error: `${error.message} (${error.code})` })
     );
   }
 }
@@ -948,7 +918,7 @@ async function devGatewayUpgrade(button) {
     button.disabled = false;
     renderResult(
       state.report,
-      `Gateway upgrade simulation unavailable: ${error.message} (${error.code})`
+      I18N.t('dyn.dev.upgradeUnavailable', { error: `${error.message} (${error.code})` })
     );
   }
 }
@@ -959,40 +929,43 @@ async function devGatewayUpgrade(button) {
 function advancedDetails(report) {
   const safeTest = report.recommended_safe_test;
   const rows = [
-    ['Case status', report.status],
-    ['Compatibility', report.compatibility_status],
-    ['Next action', report.next_action],
-    ['Match', report.match_source],
-    ['Confidence', `${Math.round((report.confidence || 0) * 100)}%`],
-    ['Profile', report.candidate_profile || '—'],
-    ['Transport', report.candidate_transport],
-    ['Protocol', report.candidate_protocol],
-    ['Connection hint', report.connection_hint || '—'],
-    ['Scan source', (report.scan_source && report.scan_source.kind) || '—'],
-    ['Fingerprint ID', report.fingerprint_id || '—'],
+    ['dyn.row.caseStatus', report.status],
+    ['dyn.row.compatibility', report.compatibility_status],
+    ['dyn.row.nextAction', report.next_action],
+    ['dyn.row.match', report.match_source],
+    ['dyn.row.confidence', `${Math.round((report.confidence || 0) * 100)}%`],
+    ['dyn.row.profile', report.candidate_profile || '—'],
+    ['dyn.row.transport', report.candidate_transport],
+    ['dyn.row.protocol', report.candidate_protocol],
+    ['dyn.row.connectionHint', report.connection_hint || '—'],
+    ['dyn.row.scanSource', (report.scan_source && report.scan_source.kind) || '—'],
+    ['dyn.row.fingerprintId', report.fingerprint_id || '—'],
     [
-      'Transport source',
+      'dyn.row.transportSource',
       (report.normalized_fingerprint && report.normalized_fingerprint.transport_source) || '—',
     ],
-    ['Evidence', (report.reason_codes || []).join(', ') || '—'],
+    ['dyn.row.evidence', (report.reason_codes || []).join(', ') || '—'],
     [
-      'Scan latency',
+      'dyn.row.scanLatency',
       report.scan && report.scan.elapsed_ms != null ? `${report.scan.elapsed_ms} ms` : '—',
     ],
-    ['Safe test', safeTest ? safeTest.safe_test_id : '—'],
-    ['Safe test simulated', String(Boolean(report.safe_test_run && report.safe_test_run.simulated))],
-    ['Executable', safeTest ? String(safeTest.executable) : '—'],
-    ['Firmware required', String(Boolean(report.requires_firmware_update))],
-    ['Firmware available', String(Boolean(report.firmware_available))],
-    ['Minimum firmware', report.minimum_firmware_version || '—'],
-    ['Firmware channel', report.firmware_channel || '—'],
-    ['Case ID', report.case_id || '—'],
+    ['dyn.row.safeTest', safeTest ? safeTest.safe_test_id : '—'],
+    [
+      'dyn.row.safeTestSimulated',
+      String(Boolean(report.safe_test_run && report.safe_test_run.simulated)),
+    ],
+    ['dyn.row.executable', safeTest ? String(safeTest.executable) : '—'],
+    ['dyn.row.firmwareRequired', String(Boolean(report.requires_firmware_update))],
+    ['dyn.row.firmwareAvailable', String(Boolean(report.firmware_available))],
+    ['dyn.row.minimumFirmware', report.minimum_firmware_version || '—'],
+    ['dyn.row.firmwareChannel', report.firmware_channel || '—'],
+    ['dyn.row.caseId', report.case_id || '—'],
   ];
 
   return h(
     'details',
     { class: 'advanced' },
-    h('summary', { text: 'Advanced details' }),
+    h('summary', { text: I18N.t('dyn.advanced.summary') }),
     h(
       'table',
       null,
@@ -1000,7 +973,7 @@ function advancedDetails(report) {
         'tbody',
         null,
         ...rows.map(([key, value]) =>
-          h('tr', null, h('td', { text: key }), h('td', { text: value }))
+          h('tr', null, h('td', { text: I18N.t(key) }), h('td', { text: value }))
         )
       )
     )
@@ -1015,6 +988,7 @@ function advancedDetails(report) {
 function resetFlow() {
   state.caseId = null;
   state.report = null;
+  state.notice = null;
   state.device = null;
   $('result').replaceChildren();
   if ($('rescue-card')) $('rescue-card').hidden = true;
@@ -1038,13 +1012,33 @@ const PAGE_INIT = {
   compatibility: initStaticPage,
 };
 
+// Rebuild everything the script rendered when the language changes: static
+// markup is handled by I18N.apply(), these are the nodes it cannot know about.
+function rerenderForLanguage() {
+  if (state.gateway) {
+    setBarStatus(state.gateway);
+    renderGateway(state.gateway);
+  } else if (state.demo) {
+    renderDemoGateway();
+  } else {
+    setBarStatus(null);
+  }
+  if (state.report) renderResult(state.report, state.notice || undefined);
+}
+
 function boot() {
+  I18N.init();
+  // The bar and the gateway card are rendered by this script, so their first
+  // paint is localised here rather than through data-i18n.
+  setBarStatus(null);
+  if ($('gateway-name')) $('gateway-name').textContent = I18N.t('home.gatewayLoading');
   if (DEV_MODE && $('dev-devices')) {
     $('dev-devices').hidden = false;
     document.body.classList.add('dev-mode');
   }
   const init = PAGE_INIT[PAGE];
   if (init) init();
+  document.addEventListener('rtg:langchange', rerenderForLanguage);
   loadGateway();
 }
 

@@ -12,30 +12,32 @@
 <header class="site-bar">
   <div class="wrap wide">
     <a class="brand" href="/">Remote Print Gateway</a>
-    <nav class="site-nav" aria-label="Sections">
-      <a href="/">Home</a>
-      <a href="/setup" class="is-active">Setup</a>
-      <a href="/printers">Printers</a>
-      <a href="/lab">Lab</a>
-      <a href="/print">Print</a>
-      <a href="/compatibility">Compatibility</a>
+    <nav class="site-nav" aria-label="Sections" data-i18n-aria="nav.aria">
+      <a href="/" data-i18n="nav.home">Home</a>
+      <a href="/setup" class="is-active" data-i18n="nav.setup">Setup</a>
+      <a href="/printers" data-i18n="nav.printers">Printers</a>
+      <a href="/lab" data-i18n="nav.lab">Lab</a>
+      <a href="/print" data-i18n="nav.print">Print</a>
+      <a href="/compatibility" data-i18n="nav.compatibility">Compatibility</a>
     </nav>
-    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <select id="lang-switch" class="lang-switch" aria-label="Language" data-i18n-aria="lang.label">
+      <option value="en">English</option>
+      <option value="zh-CN">简体中文</option>
+    </select>
+    <a class="btn ghost" href="/printers/add" data-i18n="nav.addPrinter">Add Printer</a>
     <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
   </div>
 </header>
 
 <main class="wrap wide">
   <div class="page-head">
-    <h1>Set up your Gateway</h1>
-    <p>Five steps from a bare board to a Gateway this site can talk to. This page is a preview:
-       nothing is flashed, and no Wi-Fi credentials are sent.</p>
+    <h1 data-i18n="setup.title">Set up your Gateway</h1>
+    <p data-i18n="setup.lede">Five steps from a bare board to a Gateway this site can talk to. This page is a preview: nothing is flashed, and no Wi-Fi credentials are sent.</p>
   </div>
 
   <p class="note">
-    <strong>Demo / Simulator.</strong> Setup hardware access is not wired up in this build.
-    Web Serial support coming next; until then these steps describe the real flow without
-    touching a device.
+    <strong data-i18n="common.demoTag">Demo / Simulator.</strong>
+    <span data-i18n="setup.demoBody">Setup hardware access is not wired up in this build. Web Serial support coming next; until then these steps describe the real flow without touching a device.</span>
   </p>
 
   <section class="card gateway-card" id="gateway-card" aria-live="polite">
@@ -55,38 +57,36 @@
 
   <div class="stack">
     <section class="card">
-      <h2>1. Connect Gateway</h2>
-      <p>Plug your Gateway board into USB and wait for the status light.</p>
-      <p class="note">Status: <strong>Demo</strong> — no USB device is opened by this page.</p>
+      <h2 data-i18n="setup.step1.title">1. Connect Gateway</h2>
+      <p data-i18n="setup.step1.body">Plug your Gateway board into USB and wait for the status light.</p>
+      <p class="note" data-i18n="setup.step1.status">Status: Demo — no USB device is opened by this page.</p>
     </section>
 
     <section class="card">
-      <h2>2. Check Gateway</h2>
-      <p>Confirm the Gateway answers before you add anything to it.</p>
+      <h2 data-i18n="setup.step2.title">2. Check Gateway</h2>
+      <p data-i18n="setup.step2.body">Confirm the Gateway answers before you add anything to it.</p>
       <div class="actions">
-        <a class="btn primary" href="/lab">Check in the Lab</a>
+        <a class="btn primary" href="/lab" data-i18n="setup.step2.cta">Check in the Lab</a>
       </div>
     </section>
 
     <section class="card">
-      <h2>3. Firmware</h2>
-      <p>The Gateway reports its firmware version and the profiles it can run. Updates are
-         installed from the device side today; a browser-based update is planned.</p>
-      <p class="note">Status: <strong>Coming soon</strong> — OTA from the browser is not available.</p>
+      <h2 data-i18n="setup.step3.title">3. Firmware</h2>
+      <p data-i18n="setup.step3.body">The Gateway reports its firmware version and the profiles it can run. Updates are installed from the device side today; a browser-based update is planned.</p>
+      <p class="note" data-i18n="setup.step3.status">Status: Coming soon — OTA from the browser is not available.</p>
     </section>
 
     <section class="card">
-      <h2>4. Wi-Fi Setup</h2>
-      <p>Send the local network name and password to the board so it appears on your network.</p>
-      <p class="note">Status: <strong>Coming soon</strong> — Web Serial support coming next.
-         No credentials are collected on this page.</p>
+      <h2 data-i18n="setup.step4.title">4. Wi-Fi Setup</h2>
+      <p data-i18n="setup.step4.body">Send the local network name and password to the board so it appears on your network.</p>
+      <p class="note" data-i18n="setup.step4.status">Status: Coming soon — Web Serial support coming next. No credentials are collected on this page.</p>
     </section>
 
     <section class="card">
-      <h2>5. Gateway Ready</h2>
-      <p>Once the Gateway is online, add a printer and run the compatibility check.</p>
+      <h2 data-i18n="setup.step5.title">5. Gateway Ready</h2>
+      <p data-i18n="setup.step5.body">Once the Gateway is online, add a printer and run the compatibility check.</p>
       <div class="actions">
-        <a class="btn primary" href="/printers/add">Add Printer</a>
+        <a class="btn primary" href="/printers/add" data-i18n="setup.step5.cta">Add Printer</a>
       </div>
     </section>
   </div>
@@ -94,10 +94,11 @@
 
 <footer class="site-footer">
   <div class="wrap wide">
-    <p>V1 preview — setup steps are documentation only in this build.</p>
+    <p data-i18n="setup.footer">V1 preview — setup steps are documentation only in this build.</p>
   </div>
 </footer>
 
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -181,6 +181,7 @@ ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("GET", re.compile(r"^/$"), "index_html"),
     ("GET", re.compile(r"^/index\.html$"), "index_html"),
     ("GET", re.compile(r"^/app\.js$"), "app_js"),
+    ("GET", re.compile(r"^/i18n\.js$"), "i18n_js"),
     ("GET", re.compile(r"^/styles\.css$"), "styles_css"),
     # V1 pages are real HTML paths (folder/index.html), so a deep link and a
     # browser refresh both hit the same file, locally and on static hosting.
@@ -293,6 +294,9 @@ class Api:
 
     def app_js(self, params: dict[str, str], payload: dict[str, Any]) -> StaticResponse:
         return self._static("app.js", "application/javascript; charset=utf-8")
+
+    def i18n_js(self, params: dict[str, str], payload: dict[str, Any]) -> StaticResponse:
+        return self._static("i18n.js", "application/javascript; charset=utf-8")
 
     def styles_css(self, params: dict[str, str], payload: dict[str, Any]) -> StaticResponse:
         return self._static("styles.css", "text/css; charset=utf-8")
