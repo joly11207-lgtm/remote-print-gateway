@@ -23,6 +23,9 @@ gateway/data/
 .vercel/
 .playwright-cli/
 node_modules/
+# `vercel login` writes its prompts/output here; the .out/.err pair can hold
+# account details, so they must never reach a commit.
+vercel-login.*
 
 # --- build + test logs ---
 build_logs/*.log
