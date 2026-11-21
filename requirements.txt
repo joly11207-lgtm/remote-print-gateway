@@ -1,2 +1,6 @@
 platformio==6.2.0
 ziglang==0.17.1
+
+# Gateway (Python) side. Only the compatibility engine runs Python in V0.1;
+# the firmware toolchain above does not need it.
+pydantic>=2.7,<3

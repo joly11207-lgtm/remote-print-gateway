@@ -1,0 +1,23 @@
+{
+  "model_id": "memobird_g2d",
+  "display_name": "MEMOBIRD G2D",
+  "protocol_family": "memobird",
+  "supported_transports": ["bluetooth_classic"],
+  "bluetooth_name_patterns": ["G2D", "G2D-*", "MEMOBIRD", "MEMOBIRD-*"],
+  "spp_uuid": "00001101-0000-1000-8000-00805F9B34FB",
+  "service_uuid": "",
+  "advertised_service_uuid": "",
+  "write_uuid": "",
+  "notify_uuid": "",
+  "width_dots": 0,
+  "use_lattice": false,
+  "mirror_rows": false,
+  "energy": 0,
+  "quality": 0,
+  "speed": 0,
+  "feed_dots": 0,
+  "row_delay_ms": 0,
+  "write_chunk": 0,
+  "implemented": false,
+  "notes": "Gateway-side profile only. Bluetooth Classic SPP is the transport; the payload is the Memobird Classic Protocol recovered from the official app (static analysis). No real SPP session has been run, print width is unknown, so this profile must stay EXPERIMENTAL and unimplemented."
+}

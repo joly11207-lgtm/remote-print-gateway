@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab — Remote Print Gateway</title>
+<meta name="description" content="Compatibility workbench: scan fixtures, read the fingerprint and inspect the engine report.">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body data-page="lab">
+<header class="site-bar">
+  <div class="wrap wide">
+    <a class="brand" href="/">Remote Print Gateway</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/">Home</a>
+      <a href="/setup">Setup</a>
+      <a href="/printers">Printers</a>
+      <a href="/lab" class="is-active">Lab</a>
+      <a href="/print">Print</a>
+      <a href="/compatibility">Compatibility</a>
+    </nav>
+    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
+  </div>
+</header>
+
+<main class="wrap wide">
+  <div class="page-head">
+    <h1>Lab</h1>
+    <p>Compatibility workbench. Scan a fixture, then read what the engine decided and why.
+       Fingerprints and technical values stay in this page, not in the consumer flow.</p>
+  </div>
+
+  <p class="note">
+    <strong>Simulator.</strong> The scans below use simulated hardware fixtures. A real Gateway
+    would identify the printer itself; nothing here is a real-hardware result.
+  </p>
+
+  <section class="card gateway-card" id="gateway-card" aria-live="polite">
+    <div class="card-head">
+      <div>
+        <h2 id="gateway-name">Loading gateway…</h2>
+        <p class="muted" id="gateway-place"> </p>
+      </div>
+      <span class="badge" id="gateway-status">—</span>
+    </div>
+
+    <dl class="facts" id="gateway-facts"></dl>
+    <div class="chips" id="gateway-caps"></div>
+
+    <p class="note error" id="gateway-error" hidden></p>
+  </section>
+
+  <section class="card">
+    <h2>Analyze a printer</h2>
+    <p class="muted">Pick a fixture, then create a case and scan it. The engine returns the verdict.</p>
+
+    <div class="dev-block">
+      <p class="dev-label">Test device</p>
+      <div class="segmented" role="group" aria-label="Test device">
+        <button class="segment" type="button" data-device="x18">X18</button>
+        <button class="segment" type="button" data-device="g2d">G2D</button>
+        <button class="segment" type="button" data-device="unknown">Unknown</button>
+      </div>
+    </div>
+
+    <div class="field-grid">
+      <label class="field">
+        <span>Brand</span>
+        <input id="field-brand" name="brand" type="text" autocomplete="off" placeholder="e.g. 爱记星">
+      </label>
+      <label class="field">
+        <span>Model</span>
+        <input id="field-model" name="model" type="text" autocomplete="off" placeholder="e.g. X18">
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Original App <em>(optional)</em></span>
+      <input id="field-app" name="original_app" type="text" autocomplete="off" placeholder="The app you used before">
+    </label>
+
+    <div class="actions">
+      <button class="btn primary" id="btn-analyze" type="button">Analyze compatibility</button>
+      <a class="btn ghost" href="/compatibility">Compatibility library</a>
+    </div>
+    <p class="note error" id="form-error" hidden></p>
+  </section>
+
+  <section id="result" aria-live="polite"></section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap wide">
+    <p>V1 preview — Lab output comes from the local compatibility engine, fixtures only.</p>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

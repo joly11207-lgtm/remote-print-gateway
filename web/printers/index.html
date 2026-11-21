@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Printers — Remote Print Gateway</title>
+<meta name="description" content="Printers added to this Gateway. Empty in the demo build.">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body data-page="printers">
+<header class="site-bar">
+  <div class="wrap wide">
+    <a class="brand" href="/">Remote Print Gateway</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/">Home</a>
+      <a href="/setup">Setup</a>
+      <a href="/printers" class="is-active">Printers</a>
+      <a href="/lab">Lab</a>
+      <a href="/print">Print</a>
+      <a href="/compatibility">Compatibility</a>
+    </nav>
+    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
+  </div>
+</header>
+
+<main class="wrap wide">
+  <div class="page-head">
+    <h1>My Printers</h1>
+    <p>Printers added to this Gateway. A printer only appears here after a compatibility test passed.</p>
+  </div>
+
+  <section class="card" id="printer-list">
+    <h2>No printers added yet</h2>
+    <p class="muted">This build does not store printers. Anything you add in the demo is kept for the
+       current session only, and simulated printers are never listed as real hardware.</p>
+    <p class="note">Demo / Simulator — no printer record is saved on this deployment.</p>
+    <div class="actions">
+      <a class="btn primary" href="/printers/add">Add Printer</a>
+      <a class="btn ghost" href="/compatibility">Compatibility library</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>What happens after "Add Printer"</h2>
+    <p>The compatibility case is completed, the Gateway records a printer instance, and the printer
+       becomes available for print jobs. Printing itself is not connected in this build.</p>
+    <p class="note">Coming soon — printer management (rename, remove, reconnect).</p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap wide">
+    <p>V1 preview — printer list is empty by design in the demo build.</p>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

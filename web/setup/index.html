@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup — Remote Print Gateway</title>
+<meta name="description" content="The five setup steps for a Remote Print Gateway board: connect, check, firmware, Wi-Fi, ready.">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body data-page="setup">
+<header class="site-bar">
+  <div class="wrap wide">
+    <a class="brand" href="/">Remote Print Gateway</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/">Home</a>
+      <a href="/setup" class="is-active">Setup</a>
+      <a href="/printers">Printers</a>
+      <a href="/lab">Lab</a>
+      <a href="/print">Print</a>
+      <a href="/compatibility">Compatibility</a>
+    </nav>
+    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
+  </div>
+</header>
+
+<main class="wrap wide">
+  <div class="page-head">
+    <h1>Set up your Gateway</h1>
+    <p>Five steps from a bare board to a Gateway this site can talk to. This page is a preview:
+       nothing is flashed, and no Wi-Fi credentials are sent.</p>
+  </div>
+
+  <p class="note">
+    <strong>Demo / Simulator.</strong> Setup hardware access is not wired up in this build.
+    Web Serial support coming next; until then these steps describe the real flow without
+    touching a device.
+  </p>
+
+  <section class="card gateway-card" id="gateway-card" aria-live="polite">
+    <div class="card-head">
+      <div>
+        <h2 id="gateway-name">Loading gateway…</h2>
+        <p class="muted" id="gateway-place"> </p>
+      </div>
+      <span class="badge" id="gateway-status">—</span>
+    </div>
+
+    <dl class="facts" id="gateway-facts"></dl>
+    <div class="chips" id="gateway-caps"></div>
+
+    <p class="note error" id="gateway-error" hidden></p>
+  </section>
+
+  <div class="stack">
+    <section class="card">
+      <h2>1. Connect Gateway</h2>
+      <p>Plug the ESP32-S3 board in over USB-C and wait for the status light.</p>
+      <p class="note">Status: <strong>Demo</strong> — no USB device is opened by this page.</p>
+    </section>
+
+    <section class="card">
+      <h2>2. Check Gateway</h2>
+      <p>Confirm the Gateway answers before you add anything to it.</p>
+      <div class="actions">
+        <a class="btn primary" href="/lab">Check in the Lab</a>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3. Firmware</h2>
+      <p>The Gateway reports its firmware version and the profiles it can run. Updates are
+         installed from the device side today; a browser-based update is planned.</p>
+      <p class="note">Status: <strong>Coming soon</strong> — OTA from the browser is not available.</p>
+    </section>
+
+    <section class="card">
+      <h2>4. Wi-Fi Setup</h2>
+      <p>Send the local network name and password to the board so it appears on your network.</p>
+      <p class="note">Status: <strong>Coming soon</strong> — Web Serial support coming next.
+         No credentials are collected on this page.</p>
+    </section>
+
+    <section class="card">
+      <h2>5. Gateway Ready</h2>
+      <p>Once the Gateway is online, add a printer and run the compatibility check.</p>
+      <div class="actions">
+        <a class="btn primary" href="/printers/add">Add Printer</a>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap wide">
+    <p>V1 preview — setup steps are documentation only in this build.</p>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

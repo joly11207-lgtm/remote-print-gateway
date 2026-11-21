@@ -6,3 +6,33 @@ __pycache__/
 *.o
 *.exe
 .vscode/
+
+# --- secrets (never commit) ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- gateway runtime data / local databases ---
+gateway/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- deployment tooling ---
+.vercel/
+.playwright-cli/
+node_modules/
+
+# --- build + test logs ---
+build_logs/*.log
+*.log
+
+# --- crash dumps / core dirs ---
+core
+core.*
+*.dmp
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db

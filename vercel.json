@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "",
+  "outputDirectory": "web",
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/setup", "destination": "/setup/index.html" },
+    { "source": "/lab", "destination": "/lab/index.html" },
+    { "source": "/printers", "destination": "/printers/index.html" },
+    { "source": "/printers/add", "destination": "/printers/add/index.html" },
+    { "source": "/print", "destination": "/print/index.html" },
+    { "source": "/compatibility", "destination": "/compatibility/index.html" }
+  ]
+}

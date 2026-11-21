@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add Printer — Remote Print Gateway</title>
+<meta name="description" content="Check whether this gateway can talk to your printer, then add it.">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body data-page="add">
+<header class="site-bar">
+  <div class="wrap wide">
+    <a class="brand" href="/">Remote Print Gateway</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/">Home</a>
+      <a href="/setup">Setup</a>
+      <a href="/printers" class="is-active">Printers</a>
+      <a href="/lab">Lab</a>
+      <a href="/print">Print</a>
+      <a href="/compatibility">Compatibility</a>
+    </nav>
+    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
+  </div>
+</header>
+
+<main class="wrap wide">
+  <div class="page-head">
+    <h1>Add Printer</h1>
+    <p>Choose how you would like to find it. Nothing is added until a compatibility test passes.</p>
+  </div>
+
+  <section class="card" id="add-printer-card">
+    <h2>Add Printer</h2>
+    <p class="muted">Choose how you would like to find it.</p>
+    <div class="options">
+      <button class="option" type="button" disabled>
+        <span class="option-title">Scan nearby printers</span>
+        <span class="option-note">Coming later</span>
+      </button>
+      <button class="option" type="button" disabled>
+        <span class="option-title">Search supported printers</span>
+        <span class="option-note">Coming later</span>
+      </button>
+      <button class="option is-choice" type="button" id="btn-not-listed">
+        <span class="option-title">My printer isn't listed</span>
+        <span class="option-note">Compatibility check</span>
+      </button>
+    </div>
+    <p class="note">Demo / Simulator — this build uses simulated hardware fixtures.</p>
+  </section>
+
+  <section class="card" id="rescue-card" hidden>
+    <h2>My printer isn't listed</h2>
+    <p class="muted">Tell us what the printer box or its app says. We'll check what we can find.</p>
+
+    <form id="rescue-form" novalidate>
+      <div class="field-grid">
+        <label class="field">
+          <span>Brand</span>
+          <input id="field-brand" name="brand" type="text" autocomplete="off" placeholder="e.g. 爱记星">
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input id="field-model" name="model" type="text" autocomplete="off" placeholder="e.g. X18">
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Original App <em>(optional)</em></span>
+        <input id="field-app" name="original_app" type="text" autocomplete="off" placeholder="The app you used before">
+      </label>
+
+      <fieldset class="fieldset">
+        <legend>How does it normally connect?</legend>
+        <label class="radio"><input type="radio" name="connection" value="unknown" checked> I don't know</label>
+        <label class="radio"><input type="radio" name="connection" value="bluetooth"> Bluetooth</label>
+        <label class="radio"><input type="radio" name="connection" value="wifi"> Wi-Fi</label>
+      </fieldset>
+
+      <div class="dev-block" id="dev-devices" hidden>
+        <p class="dev-label">Development mode — test device</p>
+        <div class="segmented" role="group" aria-label="Test device">
+          <button class="segment" type="button" data-device="x18">X18</button>
+          <button class="segment" type="button" data-device="g2d">G2D</button>
+          <button class="segment" type="button" data-device="unknown">Unknown</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="btn-scan" type="submit">Start compatibility scan</button>
+      </div>
+      <p class="note error" id="form-error" hidden></p>
+    </form>
+  </section>
+
+  <section class="card progress-card" id="progress-card" hidden aria-live="polite">
+    <h2>Checking your printer</h2>
+    <ul class="steps" id="progress-steps">
+      <li>Looking for your printer…</li>
+      <li>Reading device information…</li>
+      <li>Checking compatibility…</li>
+    </ul>
+  </section>
+
+  <section id="result" aria-live="polite"></section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap wide">
+    <p>V1 preview — compatibility checks are read-only. No print job is sent.</p>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

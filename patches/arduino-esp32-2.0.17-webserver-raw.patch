@@ -1,0 +1,26 @@
+--- a/libraries/WebServer/src/Parsing.cpp
++++ b/libraries/WebServer/src/Parsing.cpp
+@@ -184,7 +184,11 @@
+       _currentRaw->status = RAW_WRITE;
+ 
+       while (_currentRaw->totalSize < _clientContentLength) {
+-        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, HTTP_RAW_BUFLEN);
++        size_t want = _clientContentLength - _currentRaw->totalSize;
++        if (want > (size_t)HTTP_RAW_BUFLEN) {
++          want = (size_t)HTTP_RAW_BUFLEN;
++        }
++        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, want);
+         _currentRaw->totalSize += _currentRaw->currentSize;
+         if (_currentRaw->currentSize == 0) {
+           _currentRaw->status = RAW_ABORTED;
+--- a/libraries/WebServer/src/WebServer.h
++++ b/libraries/WebServer/src/WebServer.h
+@@ -71,7 +71,7 @@
+   HTTPRawStatus status;
+   size_t  totalSize;   // content size
+   size_t  currentSize; // size of data currently in buf
+-  uint8_t buf[HTTP_UPLOAD_BUFLEN];
++  uint8_t buf[HTTP_RAW_BUFLEN];
+   void    *data;       // additional data
+ } HTTPRaw;
+ 

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Print Gateway — bring your printer online</title>
+<meta name="description" content="Check whether this gateway can talk to your printer, then add it. Demo build: no real hardware is connected.">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body data-page="home">
+<header class="site-bar">
+  <div class="wrap wide">
+    <a class="brand" href="/">Remote Print Gateway</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/" class="is-active">Home</a>
+      <a href="/setup">Setup</a>
+      <a href="/printers">Printers</a>
+      <a href="/lab">Lab</a>
+      <a href="/print">Print</a>
+      <a href="/compatibility">Compatibility</a>
+    </nav>
+    <a class="btn ghost" href="/printers/add">Add Printer</a>
+    <span class="bar-status is-offline" id="bar-gateway">Gateway: offline</span>
+  </div>
+</header>
+
+<main class="wrap wide">
+  <div class="page-head">
+    <h1>Bring your printer online</h1>
+    <p>Check whether this Gateway can talk to your printer, then add it. Two steps, no account, no print job is sent.</p>
+  </div>
+
+  <p class="note">
+    <strong>Demo / Simulator.</strong> This build runs on simulated hardware data. It is not
+    connected to a real Gateway or a real printer, and every printer shown here is a fixture.
+  </p>
+
+  <section class="card gateway-card" id="gateway-card" aria-live="polite">
+    <div class="card-head">
+      <div>
+        <h2 id="gateway-name">Loading gateway…</h2>
+        <p class="muted" id="gateway-place"> </p>
+      </div>
+      <span class="badge" id="gateway-status">—</span>
+    </div>
+
+    <dl class="facts" id="gateway-facts"></dl>
+    <div class="chips" id="gateway-caps"></div>
+
+    <p class="note error" id="gateway-error" hidden></p>
+  </section>
+
+  <div class="page-grid three">
+    <a class="tile" href="/printers/add">
+      <h3>Add Printer</h3>
+      <p>Run the compatibility check for a printer that isn't listed.</p>
+      <span class="tile-go">Start →</span>
+    </a>
+    <a class="tile" href="/printers">
+      <h3>My Printers</h3>
+      <p>Printers added to this Gateway. Empty in this demo build.</p>
+      <span class="tile-go">Open →</span>
+    </a>
+    <a class="tile" href="/setup">
+      <h3>Setup</h3>
+      <p>Connect, check and prepare a Gateway board.</p>
+      <span class="tile-go">Open →</span>
+    </a>
+    <a class="tile" href="/lab">
+      <h3>Lab</h3>
+      <p>Development workbench: scan fixtures, read fingerprints, inspect reports.</p>
+      <span class="tile-go">Open →</span>
+    </a>
+    <a class="tile" href="/compatibility">
+      <h3>Compatibility Library</h3>
+      <p>Which printer families this Gateway knows about, and what is missing.</p>
+      <span class="tile-go">Open →</span>
+    </a>
+    <a class="tile" href="/print">
+      <h3>Print</h3>
+      <p>Where printing will live. Not connected in this build.</p>
+      <span class="tile-go">Open →</span>
+    </a>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap wide">
+    <p>V1 preview — compatibility checks are read-only. No print job is sent.</p>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
