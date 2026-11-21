@@ -7,14 +7,21 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/Base64.h"
 #include "app/Discovery.h"
 #include "app/CompatibilityReport.h"
 #include "app/JsonMini.h"
+#include "app/JobId.h"
 #include "app/OtaService.h"
 #include "app/PrintQueue.h"
+#include "app/PrintRequestParser.h"
+#include "app/PrintSubmission.h"
+#include "app/RawPrintAssembler.h"
+#include "app/SafeTestRegistry.h"
+#include "app/SerialControl.h"
 #include "bitmap/BitmapPipeline.h"
 #include "boards/BoardCapabilities.h"
 #include "config/RtbConfig.h"
@@ -678,6 +685,502 @@ static void testBitmapAndHelpers() {
         report.find("NOT_IMPLEMENTED") != std::string::npos);
 }
 
+static bool sameBytes(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+static std::string printBody(const std::string& rows_b64, const std::string& row_bytes = "48",
+                             const std::string& feed = "64") {
+  std::string body = "{\"job_id\":\"x18-test\",\"row_bytes\":";
+  body += row_bytes;
+  body += ",\"feed\":";
+  body += feed;
+  body += ",\"rows_b64\":\"";
+  body += rows_b64;
+  body += "\"}";
+  return body;
+}
+
+static void testPrintRequestParser() {
+  section("Print request parser: in-place base64 + bounded allocation");
+
+  // ---- 1. the real X18 payload shape: 64 rows x 48 B = 3072 B -> 4096 chars
+  std::vector<uint8_t> bitmap(48 * 64, 0);
+  for (size_t i = 0; i < bitmap.size(); ++i) {
+    bitmap[i] = static_cast<uint8_t>((i * 7) & 0xFF);
+  }
+  const std::string encoded = base64Encode(bitmap.data(), bitmap.size());
+  CHECK(encoded.size() == 4096);
+  CHECK(base64MaxDecodedSize(encoded.size()) >= bitmap.size());
+
+  const std::string body = printBody(encoded);
+
+  // The field must be REFERENCED, not copied: the pointer lives inside `body`.
+  const JsonFieldSlice slice = jsonStringSlice(body, "rows_b64");
+  CHECK(slice.found);
+  CHECK(!slice.escaped);
+  CHECK(slice.size == encoded.size());
+  CHECK(slice.data >= body.data() && slice.data + slice.size <= body.data() + body.size());
+  CHECK(static_cast<size_t>(slice.data - body.data()) == body.find(encoded));
+
+  PrintLimits limits;
+  ParsedPrintRequest parsed;
+  CHECK(parsePrintRequest(body, limits, 48, 64, parsed) == PrintParseError::None);
+  CHECK(parsed.rows.size() == bitmap.size());
+  CHECK(sameBytes(parsed.rows, bitmap));
+  CHECK(parsed.row_bytes == 48);
+  CHECK(parsed.row_count == 64);
+  CHECK(parsed.feed_dots == 64);
+  CHECK(parsed.job_id == "x18-test");
+  CHECK(!parsed.test_pattern);
+
+  // ---- 2. same request parsed twice: same result, still no copy of the field
+  ParsedPrintRequest again;
+  CHECK(parsePrintRequest(body, limits, 48, 64, again) == PrintParseError::None);
+  CHECK(sameBytes(again.rows, parsed.rows));
+  CHECK(jsonStringSlice(body, "rows_b64").data == slice.data);
+
+  // ---- 3. empty field
+  ParsedPrintRequest empty;
+  CHECK(parsePrintRequest(printBody(""), limits, 48, 64, empty) ==
+        PrintParseError::MissingRows);
+  CHECK(empty.rows.empty());
+
+  // ---- 4. field absent entirely
+  ParsedPrintRequest absent;
+  CHECK(parsePrintRequest("{\"job_id\":\"a\"}", limits, 48, 64, absent) ==
+        PrintParseError::MissingRows);
+  CHECK(printParseErrorStatus(PrintParseError::MissingRows) == 400);
+
+  // ---- 5. invalid base64 alphabet
+  ParsedPrintRequest bad;
+  CHECK(parsePrintRequest(printBody("!!!!"), limits, 48, 64, bad) ==
+        PrintParseError::InvalidBase64);
+  CHECK(bad.rows.empty());
+
+  // ---- 6. base64 with a backslash escape cannot be referenced in place
+  ParsedPrintRequest escaped;
+  CHECK(parsePrintRequest("{\"rows_b64\":\"AA\\/==\",\"row_bytes\":48}", limits, 48, 64,
+                          escaped) == PrintParseError::InvalidBase64);
+
+  // ---- 7. truncated JSON (no closing quote)
+  ParsedPrintRequest truncated;
+  CHECK(parsePrintRequest("{\"row_bytes\":48,\"rows_b64\":\"AAAA", limits, 48, 64,
+                          truncated) == PrintParseError::InvalidJson);
+
+  // ---- 8. test pattern still works through the same entry point
+  ParsedPrintRequest pattern;
+  CHECK(parsePrintRequest("{\"test\":true,\"row_bytes\":48}", limits, 48, 64, pattern) ==
+        PrintParseError::None);
+  CHECK(pattern.test_pattern);
+  CHECK(pattern.rows.size() == 48 * 24);
+  CHECK(pattern.row_count == 24);
+
+  // ---- 9. exactly the maximum bitmap size is accepted (64 B rows -> 1024 rows)
+  // The default body limit is the SMALL / LEGACY 8 KB, so a 64 KB bitmap cannot
+  // travel through /api/print at all; lift only the body ceiling here to test
+  // the logical bitmap limit on its own.
+  PrintLimits bitmap_limits;
+  bitmap_limits.max_body_bytes = 256 * 1024;
+  std::vector<uint8_t> max_bitmap(RTB_MAX_JOB_BITMAP_BYTES, 0x5A);
+  const std::string max_encoded = base64Encode(max_bitmap.data(), max_bitmap.size());
+  ParsedPrintRequest at_limit;
+  CHECK(parsePrintRequest(printBody(max_encoded, "64"), bitmap_limits, 64, 64, at_limit) ==
+        PrintParseError::None);
+  CHECK(at_limit.rows.size() == RTB_MAX_JOB_BITMAP_BYTES);
+  CHECK(at_limit.row_count == RTB_MAX_JOB_BITMAP_BYTES / 64);
+
+  // ---- 10. one byte over the limit is rejected before enqueueing
+  std::vector<uint8_t> over_bitmap(RTB_MAX_JOB_BITMAP_BYTES + 1, 0x5A);
+  const std::string over_encoded = base64Encode(over_bitmap.data(), over_bitmap.size());
+  ParsedPrintRequest over;
+  CHECK(parsePrintRequest(printBody(over_encoded, "64"), bitmap_limits, 64, 64, over) ==
+        PrintParseError::PayloadTooLarge);
+  CHECK(printParseErrorStatus(PrintParseError::PayloadTooLarge) == 413);
+  CHECK(over.rows.empty());
+
+  // ---- 10b. the same 64 KB request against the DEFAULT (small) limits is
+  // rejected on the body ceiling first: /api/print is not a bulk transport.
+  ParsedPrintRequest bulk;
+  CHECK(parsePrintRequest(printBody(max_encoded, "64"), limits, 64, 64, bulk) ==
+        PrintParseError::PayloadTooLarge);
+  CHECK(printParseErrorStatus(PrintParseError::PayloadTooLarge) == 413);
+
+  // ---- 11. oversized HTTP body is rejected without parsing anything
+  std::string huge(RTB_HTTP_MAX_BODY_BYTES + 1, 'x');
+  huge += "{\"rows_b64\":\"\"}";
+  ParsedPrintRequest huge_out;
+  CHECK(parsePrintRequest(huge, limits, 48, 64, huge_out) ==
+        PrintParseError::PayloadTooLarge);
+
+  // ---- 12. decoder primitives: capacity guard and truncated final group
+  uint8_t small[2];
+  size_t written = 0;
+  CHECK(!base64DecodeInto("aGVsbG8=", 8, small, 2, written));
+  uint8_t exact[5];
+  CHECK(base64DecodeInto("aGVsbG8=", 8, exact, 5, written));
+  CHECK(written == 5);
+  CHECK(!base64DecodeInto("aGVsb", 5, exact, 5, written));
+
+  // ---- 13. the queue limit the parser mirrors
+  CHECK(RTB_MAX_JOB_BITMAP_BYTES == 64u * 1024u);
+  PrintQueue q;
+  PrintJob job;
+  job.row_bytes = 48;
+  job.row_count = 1;
+  job.rows.assign(48, 0);
+  const char* reason = "";
+  CHECK(q.enqueue(job, 0, reason) == Result::Ok);
+
+  // ---- 14. a finished job releases its bitmap: the heap must not drift 3 KB
+  // per print, and the reported counters must survive the release.
+  PrintJob done_job;
+  done_job.job_id = "release-check";
+  done_job.row_bytes = 48;
+  done_job.row_count = 64;
+  done_job.rows.assign(48 * 64, 0x33);
+  CHECK(q.enqueue(done_job, 1, reason) == Result::Ok);
+  PrintJob* queued = q.find(done_job.job_id);
+  CHECK(queued != nullptr);
+  CHECK(queued->rows.size() == 48 * 64);
+  q.markDone(done_job.dedup_key);
+  PrintJob* finished = q.find(done_job.job_id);
+  CHECK(finished != nullptr);
+  CHECK(finished->state == JobState::Done);
+  CHECK(finished->rows.empty());
+  CHECK(finished->rows.capacity() == 0);  // the block really went back
+  CHECK(finished->row_count == 64);       // still reported by /api/queue
+}
+
+// Regression for a real UBSan finding: jsonIntFieldIn() used to accumulate
+// "value = value * 10 + digit" and check the range afterwards, so any input
+// above INT32_MAX was a signed overflow (UB) before the check ran.
+static void testJsonIntOverflow() {
+  section("JSON integer parsing: overflow rejected before it happens");
+
+  const int fallback = -12345;
+  const char* long_digits = "{\"n\":99999999999999999999999999999999999999999999}";
+
+  // The exact boundary and the three values from the report.
+  CHECK(jsonIntField("{\"n\":2147483647}", "n", fallback) == 2147483647);
+  CHECK(jsonIntField("{\"n\":2147483648}", "n", fallback) == fallback);
+  CHECK(jsonIntField("{\"n\":3000000000}", "n", fallback) == fallback);
+  CHECK(jsonIntField(long_digits, "n", fallback) == fallback);
+  CHECK(jsonIntField("{\"n\":-3000000000}", "n", fallback) == fallback);
+  CHECK(jsonIntField("{\"n\":-2147483647}", "n", fallback) == -2147483647);
+
+  // Positive control around the boundary: one below must still parse exactly.
+  CHECK(jsonIntField("{\"n\":2147483646}", "n", fallback) == 2147483646);
+
+  // Same inputs through the in-place entry point (no std::string overload).
+  const std::string in_place = "{\"feed\":3000000000}";
+  CHECK(jsonIntFieldIn(in_place.data(), in_place.size(), "feed", fallback) == fallback);
+  const std::string in_place_max = "{\"feed\":2147483647}";
+  CHECK(jsonIntFieldIn(in_place_max.data(), in_place_max.size(), "feed", fallback) ==
+        2147483647);
+
+  // Real entry points must fall back to the profile defaults, not to a wrapped
+  // negative row_bytes / feed.
+  PrintLimits limits;
+  ParsedPrintRequest parsed;
+  CHECK(parsePrintRequest("{\"test\":true,\"row_bytes\":3000000000}", limits, 48, 64,
+                          parsed) == PrintParseError::None);
+  CHECK(parsed.row_bytes == 48);   // profile default, not a wrapped value
+  CHECK(parsed.feed_dots == 64);
+
+  CHECK(parsePrintRequest("{\"test\":true,\"row_bytes\":48,\"feed\":3000000000}", limits,
+                          48, 64, parsed) == PrintParseError::None);
+  CHECK(parsed.row_bytes == 48);
+  CHECK(parsed.feed_dots == 64);   // default, not a wrapped value
+
+  // INT32_MAX itself must still be parsed (and then rejected by the size limit),
+  // which proves the value is not silently replaced by the fallback.
+  CHECK(parsePrintRequest("{\"test\":true,\"row_bytes\":2147483647}", limits, 48, 64,
+                          parsed) == PrintParseError::PayloadTooLarge);
+  CHECK(parsed.rows.empty());
+}
+
+// Shared job_id contract (JobId.h): one rule set for /api/print and
+// /api/print/raw.
+static void testJobIdContract() {
+  section("job_id contract shared by JSON and raw endpoints");
+
+  CHECK(kMaxJobIdLength == 64);
+  CHECK(isValidJobId(""));                      // empty = content-hash namespace
+  CHECK(isValidJobId("X18-1_a.b:c"));
+  CHECK(isValidJobId(std::string(64, 'a')));    // at the limit
+  CHECK(!isValidJobId(std::string(65, 'a')));   // one over
+  CHECK(!isValidJobId("bad id"));               // space
+  CHECK(!isValidJobId("bad/id"));               // slash
+  CHECK(!isValidJobId("bad\"id"));              // quote (would break JSON)
+  CHECK(!isValidJobId("bad\nid"));
+
+  // JSON endpoint: rejected by the parser, 400 invalid_job_id.
+  PrintLimits limits;
+  ParsedPrintRequest parsed;
+  CHECK(parsePrintRequest("{\"job_id\":\"bad id\",\"test\":true}", limits, 48, 64,
+                          parsed) == PrintParseError::InvalidJobId);
+  CHECK(std::string(printParseErrorName(PrintParseError::InvalidJobId)) ==
+        "invalid_job_id");
+  CHECK(printParseErrorStatus(PrintParseError::InvalidJobId) == 400);
+  CHECK(parsePrintRequest("{\"test\":true}", limits, 48, 64, parsed) ==
+        PrintParseError::None);  // empty job_id still allowed
+
+  // Raw endpoint: same rule, same error name, same status.
+  RawPrintMeta meta;
+  meta.row_bytes = 48;
+  meta.job_id = "bad id";
+  RawPrintAssembler assembler;
+  CHECK(assembler.begin(48, meta, limits, 0) == RawBeginResult::InvalidArgument);
+  CHECK(std::string(assembler.errorName()) == "invalid_job_id");
+  CHECK(rawBeginResultStatus(RawBeginResult::InvalidArgument) == 400);
+
+  meta.job_id.clear();
+  CHECK(assembler.begin(48, meta, limits, 0) == RawBeginResult::Ok);  // empty ok
+  assembler.abort();
+}
+
+// POST /api/print is the SMALL / LEGACY JSON endpoint: 8 KB body ceiling,
+// logical bitmap ceiling, plus a runtime heap budget.
+static void testJsonPrintEndpointPolicy() {
+  section("/api/print JSON endpoint: 8 KB legacy ceiling + heap budget + 409");
+
+  // The policy itself: bulk bitmaps must use /api/print/raw.
+  CHECK(RTB_HTTP_MAX_BODY_BYTES == 8u * 1024u);
+  CHECK(RTB_MAX_JOB_BITMAP_BYTES == 64u * 1024u);  // logical limit unchanged
+
+  PrintLimits limits;  // defaults: 8 KB body, 64 KB bitmap, no heap check
+  const std::vector<uint8_t> bitmap(48 * 8, 0x11);  // 384 B, typical small job
+  const std::string encoded = base64Encode(bitmap.data(), bitmap.size());
+
+  std::string body = "{\"job_id\":\"json-small\",\"row_bytes\":48,\"rows_b64\":\"";
+  body += encoded;
+  body += "\"}";
+  CHECK(body.size() < RTB_HTTP_MAX_BODY_BYTES);
+
+  PrintQueue queue;
+
+  // ---- 1. small valid request
+  PrintSubmitOutcome ok =
+      submitJsonPrint(body.data(), body.size(), limits, 48, 64, queue, 0);
+  CHECK(ok.http_status == 200);
+  CHECK(ok.body.find("\"ok\":true") != std::string::npos);
+  CHECK(queue.size() == 1);
+
+  // ---- 2. duplicate job_id -> 409, not 400, and nothing is added
+  PrintSubmitOutcome dup =
+      submitJsonPrint(body.data(), body.size(), limits, 48, 64, queue, 1);
+  CHECK(dup.http_status == 409);
+  CHECK(dup.body.find("\"ok\":false") != std::string::npos);
+  CHECK(dup.body.find("duplicate_job") != std::string::npos);
+  CHECK(queue.size() == 1);
+
+  // ---- 3. body above the configured ceiling -> 413
+  std::string too_long = body;
+  too_long.append(RTB_HTTP_MAX_BODY_BYTES, ' ');
+  PrintSubmitOutcome over_body =
+      submitJsonPrint(too_long.data(), too_long.size(), limits, 48, 64, queue, 2);
+  CHECK(over_body.http_status == 413);
+  CHECK(over_body.body.find("payload_too_large") != std::string::npos);
+  CHECK(queue.size() == 1);
+
+  // ---- 4. bitmap above the LOGICAL limit -> 413 (body ceiling lifted here so
+  // the bitmap limit is the one that fires)
+  PrintLimits big_body;
+  big_body.max_body_bytes = 256 * 1024;
+  std::vector<uint8_t> huge_bitmap(RTB_MAX_JOB_BITMAP_BYTES + 48, 0x22);
+  const std::string huge_encoded = base64Encode(huge_bitmap.data(), huge_bitmap.size());
+  std::string huge_body = "{\"job_id\":\"json-huge\",\"row_bytes\":48,\"rows_b64\":\"";
+  huge_body += huge_encoded;
+  huge_body += "\"}";
+  PrintSubmitOutcome logical =
+      submitJsonPrint(huge_body.data(), huge_body.size(), big_body, 48, 64, queue, 3);
+  CHECK(logical.http_status == 413);
+  CHECK(logical.body.find("payload_too_large") != std::string::npos);
+  CHECK(queue.size() == 1);
+
+  // ---- 5. logically legal, but the heap budget is one byte short -> 503
+  PrintLimits tight = limits;
+  tight.heap_budget_bytes = bitmap.size() - 1;
+  PrintSubmitOutcome oom =
+      submitJsonPrint(body.data(), body.size(), tight, 48, 64, queue, 4);
+  CHECK(oom.http_status == 503);
+  CHECK(oom.body.find("insufficient_memory") != std::string::npos);
+  CHECK(queue.size() == 1);  // nothing enqueued
+
+  // ---- 6. exactly enough budget is accepted (different job_id: the queue must
+  // not dedup on content, this is the id namespace)
+  PrintLimits exact = limits;
+  exact.heap_budget_bytes = bitmap.size();
+  std::string body_fit = "{\"job_id\":\"json-fit\",\"row_bytes\":48,\"rows_b64\":\"";
+  body_fit += encoded;
+  body_fit += "\"}";
+  PrintSubmitOutcome fits =
+      submitJsonPrint(body_fit.data(), body_fit.size(), exact, 48, 64, queue, 5);
+  CHECK(fits.http_status == 200);
+  CHECK(queue.size() == 2);
+
+  // ---- 7. invalid job_id -> 400 invalid_job_id (same rule as raw)
+  std::string bad_id = "{\"job_id\":\"bad id!\",\"row_bytes\":48,\"rows_b64\":\"";
+  bad_id += encoded;
+  bad_id += "\"}";
+  PrintSubmitOutcome bad =
+      submitJsonPrint(bad_id.data(), bad_id.size(), limits, 48, 64, queue, 6);
+  CHECK(bad.http_status == 400);
+  CHECK(bad.body.find("invalid_job_id") != std::string::npos);
+  CHECK(queue.size() == 2);
+
+  // ---- 8. dedup namespaces stay separate:
+  //         no job_id -> content hash dedup (second attempt 409)
+  //         identical content with a NEW job_id -> still accepted
+  std::string no_id_body = "{\"row_bytes\":48,\"rows_b64\":\"";
+  no_id_body += encoded;
+  no_id_body += "\"}";
+  PrintSubmitOutcome first_no_id =
+      submitJsonPrint(no_id_body.data(), no_id_body.size(), limits, 48, 64, queue, 7);
+  CHECK(first_no_id.http_status == 200);
+  PrintSubmitOutcome again_no_id =
+      submitJsonPrint(no_id_body.data(), no_id_body.size(), limits, 48, 64, queue, 8);
+  CHECK(again_no_id.http_status == 409);
+  CHECK(again_no_id.body.find("duplicate_job") != std::string::npos);
+
+  std::string reid_body = "{\"job_id\":\"json-reid\",\"row_bytes\":48,\"rows_b64\":\"";
+  reid_body += encoded;
+  reid_body += "\"}";
+  PrintSubmitOutcome reid =
+      submitJsonPrint(reid_body.data(), reid_body.size(), limits, 48, 64, queue, 9);
+  CHECK(reid.http_status == 200);
+  CHECK(queue.size() == 4);  // small, fit, no-id, reid - no cross-namespace dedup
+
+  // ---- 9. the queue mapper is shared with the raw handler
+  CHECK(printEnqueueStatus(Result::Ok) == 200);
+  CHECK(printEnqueueStatus(Result::Busy) == 409);
+  CHECK(printEnqueueStatus(Result::InvalidArgument) == 400);
+  CHECK(printEnqueueStatus(Result::IoError) == 400);
+}
+
+// The firmware half of the safe-test whitelist: an HTTP request names an id and
+// never carries bytes. These checks are what "no arbitrary HEX" means.
+static void testSafeTestRegistry() {
+  section("safe test registry: ids only, no raw command surface");
+
+  CHECK(safeTestCount() == 1);
+  const SafeTestSpec* spec = findSafeTest("SAFE_TEST_TINY_STATUS_V1");
+  CHECK(spec != nullptr);
+  CHECK(std::string(spec->protocol) == "tiny_iprint");
+  CHECK(std::string(spec->transport) == "ble");
+  CHECK(spec->moves_paper == false);  // a compatibility test never prints
+  CHECK(kSafeTestStatusOpcode == 0xA3);
+  CHECK(kSafeTestStatusPayload == 0x00);
+
+  // The verified X18 command is exactly A3 [0x00], and it round-trips through
+  // the same parser the firmware uses for the printer's answer.
+  uint8_t frame[16];
+  size_t frame_len = 0;
+  const uint8_t payload[1] = {kSafeTestStatusPayload};
+  CHECK(TinyProtocol::buildFrame(kSafeTestStatusOpcode, payload, 1, frame, sizeof(frame),
+                                 frame_len) == Result::Ok);
+  TinyProtocol tiny;
+  PrinterStatus parsed;
+  CHECK(tiny.parseStatus(frame, frame_len, parsed) == Result::Ok);
+  CHECK(parsed.valid);
+  CHECK(std::string(parsed.source_opcode) == "A3");
+
+  // Anything that is not the registry id is refused - including hex strings.
+  const char* rejected[] = {
+      "", "SAFE_TEST_TINY_STATUS_V1 ", "safe_test_tiny_status_v1",
+      "A3", "A300", "0xA3", "A3 00", "\xA3\x00", "SAFE_TEST_RAW_HEX",
+      "SAFE_TEST_PRINT_DEMO", "SAFE_TEST_TINY_STATUS_V2"};
+  for (const char* value : rejected) {
+    CHECK(!isSafeTestAllowed(std::string(value)));
+    CHECK(findSafeTest(std::string(value)) == nullptr);
+  }
+}
+
+// OOM containment contract for the raw request lifecycle: a failed allocation
+// must never leave an active assembler or a queued half-job behind.
+static void testRawPrintOomContainment() {
+  section("Raw print OOM containment: no abort, no residue, next job works");
+
+  PrintLimits limits;
+  RawPrintMeta meta;
+  meta.row_bytes = 48;
+  meta.job_id = "RAW-OOM-1";
+
+  const std::vector<uint8_t> body(48 * 4, 0x5A);
+
+  // ---- 1. begin() refused by the heap budget -> 503, nothing active
+  {
+    RawPrintAssembler a;
+    const RawBeginResult r = a.begin(body.size(), meta, limits, 100);
+    CHECK(r == RawBeginResult::InsufficientMemory);
+    CHECK(rawBeginResultStatus(r) == 503);
+    CHECK(!a.active());
+    CHECK(a.expected() == 0);
+    CHECK(a.received() == 0);
+
+    // ---- 2. the same assembler recovers for the next request
+    CHECK(a.begin(body.size(), meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), body.size()));
+    PrintJob job;
+    CHECK(a.finish(job));
+    CHECK(job.rows.size() == body.size());
+  }
+
+  // ---- 3. a body that never completes is dropped, and the next request works
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(body.size(), meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), 48));
+    PrintJob job;
+    CHECK(!a.finish(job));
+    CHECK(job.rows.empty());      // no half job leaves the assembler
+    CHECK(!a.active());
+    CHECK(a.expected() == 0);     // the block really went back
+
+    CHECK(a.begin(body.size(), meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), body.size()));
+    CHECK(a.finish(job));
+  }
+
+  // ---- 4. queue-side rejection keeps ownership with the caller and leaves no
+  // residue: the duplicate is discarded, the next distinct job is accepted
+  {
+    PrintQueue q;
+    RawPrintAssembler a;
+    const char* reason = "";
+
+    CHECK(a.begin(body.size(), meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), body.size()));
+    PrintJob first;
+    CHECK(a.finish(first));
+    CHECK(q.enqueueMove(std::move(first), 0, reason) == Result::Ok);
+    CHECK(q.size() == 1);
+
+    CHECK(a.begin(body.size(), meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), body.size()));
+    PrintJob dup;
+    CHECK(a.finish(dup));
+    CHECK(q.enqueueMove(std::move(dup), 1, reason) == Result::Busy);
+    CHECK(std::string(reason) == "duplicate_job");
+    CHECK(printEnqueueStatus(Result::Busy) == 409);
+    CHECK(q.size() == 1);   // no half task stored
+
+    RawPrintMeta next = meta;
+    next.job_id = "RAW-OOM-2";
+    CHECK(a.begin(body.size(), next, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), body.size()));
+    PrintJob recovered;
+    CHECK(a.finish(recovered));
+    CHECK(q.enqueueMove(std::move(recovered), 2, reason) == Result::Ok);
+    CHECK(q.size() == 2);
+  }
+}
+
 static void testHostCompileConditions() {
   section("Host build compile conditions");
   BleTransport ble;
@@ -932,6 +1435,49 @@ static void testDiscoveryFallback() {
     CHECK(d.match.profile == nullptr);
     CHECK(std::string(discoveryStageName(d.stage)) == "not_found");
   }
+
+  // (5) X18: advertises AF30 (lowercase from the BLE stack), GATT AA/services
+  //     unknown until connect. Must be found in PHASE 1, not after a fallback.
+  {
+    RecordingScanTransport transport;
+    Endpoint ep;
+    ep.kind = TransportKind::Ble;
+    ep.address = "e3:47:88:2e:e1:2c";
+    ep.name = "X18-47E3";
+    ep.rssi = -33;
+    ep.service_uuid = "0000af30-0000-1000-8000-00805f9b34fb";
+    transport.setScanEndpoints(std::vector<Endpoint>(1, ep));
+
+    const DiscoveryResult d = discoverPrinter(transport, 1000, 1000);
+    CHECK(d.result == Result::Ok);
+    CHECK(d.stage == DiscoveryStage::Ae30Filtered);   // phase 1, not fallback
+    CHECK(d.scan_rounds == 1 && transport.scan_calls == 1);
+    CHECK(transport.filters.size() == 1);
+    CHECK(transport.filters[0] == "AE30");            // primary unchanged
+    CHECK(d.match.profile != nullptr);
+    CHECK(std::string(d.match.profile->model_id) == "x18_aijixing");
+    CHECK(d.match.fingerprint.family == ProtocolFamily::TinyIPrint);
+    CHECK(std::string(d.match.fingerprint.evidence) == "advertised_service_af30");
+    CHECK(d.match.score >= 50);
+  }
+
+  // (6) A crowded desk must not truncate the result list (old cap was 8).
+  {
+    ScanRequest request;
+    CHECK(request.max_results >= 32);
+    RecordingScanTransport transport;
+    std::vector<Endpoint> crowd;
+    for (int i = 0; i < 12; ++i) {
+      Endpoint ep = gb01Endpoint(TransportKind::Ble);
+      ep.name = "GB01-" + std::to_string(i);
+      ep.address = "aa:bb:cc:dd:ee:" + std::to_string(10 + i);
+      crowd.push_back(ep);
+    }
+    transport.setScanEndpoints(crowd);
+    ScanResult out;
+    CHECK(transport.scan(request, out) == Result::Ok);
+    CHECK(out.endpoints.size() == 12);
+  }
 }
 
 static void testPartialPrintSemantics() {
@@ -1020,6 +1566,322 @@ static void testPartialPrintSemantics() {
   }
 }
 
+// ---- POST /api/print/raw: streaming assembler -------------------------------
+static void testRawPrintAssembler() {
+  section("Raw print assembler: streaming, limits, abort, single bitmap");
+  PrintLimits limits;  // RTB_MAX_JOB_BITMAP_BYTES = 64 KB
+  const size_t row_bytes = 48;
+
+  RawPrintMeta meta;
+  meta.row_bytes = row_bytes;
+  meta.job_id = "RAW-JOB-1";
+  meta.feed_dots = 64;
+
+  // Deliberately not a whole number of 1436-byte chunks: the tail case is the
+  // one that used to cost 5 s on the wire.
+  const size_t total = row_bytes * 86;  // 4128 bytes
+  std::vector<uint8_t> body(total);
+  for (size_t i = 0; i < total; ++i) body[i] = static_cast<uint8_t>(i * 31 + 7);
+
+  // ---- 1. one chunk
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(row_bytes * 2, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes * 2));
+    CHECK(a.received() == row_bytes * 2);
+    PrintJob job;
+    CHECK(a.finish(job));
+    CHECK(job.rows.size() == row_bytes * 2);
+    CHECK(job.rows == std::vector<uint8_t>(body.begin(), body.begin() + row_bytes * 2));
+    CHECK(job.row_count == 2);
+    CHECK(job.row_bytes == row_bytes);
+    CHECK(job.feed_dots == 64);
+    CHECK(job.job_id == "RAW-JOB-1");
+    CHECK(!a.active());
+    CHECK(a.expected() == 0);
+  }
+
+  // ---- 2. chunk sizes 1 / 64 / 512 / 1436 reassemble byte-exactly
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(total, meta, limits, 0) == RawBeginResult::Ok);
+    const size_t pattern[] = {1, 64, 512, 1436, 1, 64, 512, 1436};
+    const size_t pattern_len = sizeof(pattern) / sizeof(pattern[0]);
+    size_t offset = 0;
+    size_t step = 0;
+    while (offset < total) {
+      size_t n = pattern[step++ % pattern_len];
+      if (n > total - offset) n = total - offset;
+      CHECK(a.write(body.data() + offset, n));
+      offset += n;
+    }
+    CHECK(a.received() == total);
+    PrintJob job;
+    CHECK(a.finish(job));
+    CHECK(job.rows == body);  // no loss, no duplication, no reordering
+    CHECK(job.row_count == 86);
+  }
+
+  // ---- 3. Content-Length over the limit is rejected before allocation
+  {
+    RawPrintAssembler a;
+    const RawBeginResult r =
+        a.begin(RTB_MAX_JOB_BITMAP_BYTES + row_bytes, meta, limits, 0);
+    CHECK(r == RawBeginResult::PayloadTooLarge);
+    CHECK(rawBeginResultStatus(r) == 413);
+    CHECK(std::string(rawBeginResultName(r)) == "payload_too_large");
+    CHECK(!a.active());
+  }
+
+  // ---- 4. malformed metadata -> 400 (and nothing allocated)
+  {
+    RawPrintAssembler a;
+
+    RawPrintMeta bad = meta;
+    bad.row_bytes = 0;
+    CHECK(a.begin(row_bytes * 2, bad, limits, 0) == RawBeginResult::InvalidArgument);
+
+    bad = meta;
+    bad.row_bytes = 4096;  // above the 512-byte row cap
+    CHECK(a.begin(8192, bad, limits, 0) == RawBeginResult::InvalidArgument);
+
+    bad = meta;
+    bad.width_dots = 400;  // 400 dots does not match 48 row bytes
+    CHECK(a.begin(row_bytes * 2, bad, limits, 0) == RawBeginResult::InvalidArgument);
+
+    bad = meta;
+    bad.width_dots = 384;  // 384 dots == 48 bytes: accepted
+    CHECK(a.begin(row_bytes * 2, bad, limits, 0) == RawBeginResult::Ok);
+    a.abort();
+
+    bad = meta;
+    bad.job_id = "bad id!";  // space and '!' are not job_id characters
+    CHECK(a.begin(row_bytes * 2, bad, limits, 0) == RawBeginResult::InvalidArgument);
+
+    bad = meta;
+    bad.job_id = std::string(65, 'a');
+    CHECK(a.begin(row_bytes * 2, bad, limits, 0) == RawBeginResult::InvalidArgument);
+
+    CHECK(a.begin(0, meta, limits, 0) == RawBeginResult::InvalidArgument);
+    CHECK(rawBeginResultStatus(RawBeginResult::InvalidArgument) == 400);
+  }
+
+  // ---- 5. Content-Length that is not a whole number of rows
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(row_bytes * 2 + 1, meta, limits, 0) == RawBeginResult::InvalidArgument);
+    CHECK(std::string(a.errorName()) == "bitmap_not_row_aligned");
+  }
+
+  // ---- 6. a short body never enqueues
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(row_bytes * 2, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes));  // half of what was promised
+    PrintJob job;
+    CHECK(!a.finish(job));
+    CHECK(std::string(a.errorName()) == "body_truncated");
+    CHECK(job.rows.empty());
+    CHECK(!a.active());
+    CHECK(a.expected() == 0);  // the buffer really went back to the heap
+  }
+
+  // ---- 7. an oversized body is cut off, never written past the bitmap
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(row_bytes * 2, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes * 2));
+    CHECK(!a.write(body.data(), 1));
+    CHECK(std::string(a.errorName()) == "body_overflow");
+    CHECK(a.received() == row_bytes * 2);
+    PrintJob job;
+    CHECK(!a.finish(job));
+    CHECK(job.rows.empty());
+  }
+
+  // ---- 8. RAW_ABORTED drops everything; the next request is unaffected
+  {
+    RawPrintAssembler a;
+    CHECK(a.begin(row_bytes * 4, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes));
+    a.abort();
+    CHECK(!a.active());
+    CHECK(a.received() == 0);
+    PrintJob job;
+    CHECK(!a.finish(job));
+
+    CHECK(a.begin(row_bytes * 2, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes * 2));
+    CHECK(a.finish(job));
+    CHECK(job.rows.size() == row_bytes * 2);
+  }
+
+  // ---- 9. allocation failure is a clean 503, not a crash
+  {
+    RawPrintAssembler a;
+    const RawBeginResult r = a.begin(row_bytes * 20, meta, limits, 128);
+    CHECK(r == RawBeginResult::InsufficientMemory);
+    CHECK(rawBeginResultStatus(r) == 503);
+    CHECK(std::string(rawBeginResultName(r)) == "insufficient_memory");
+    CHECK(!a.active());
+  }
+
+  // ---- 10. the queue becomes the single owner of the bitmap
+  {
+    PrintQueue q;
+    RawPrintAssembler a;
+    CHECK(a.begin(total, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), total));
+    PrintJob job;
+    CHECK(a.finish(job));
+    CHECK(job.rows.size() == total);
+
+    const char* reason = "";
+    CHECK(q.enqueueMove(std::move(job), 0, reason) == Result::Ok);
+    CHECK(job.rows.empty());             // moved into the queue, not copied
+    CHECK(job.rows.capacity() == 0);
+    CHECK(job.dedup_key == "RAW-JOB-1"); // identifiers survive the move
+    CHECK(job.row_count == 86);
+
+    PrintJob* stored = q.find("RAW-JOB-1");
+    CHECK(stored != nullptr);
+    CHECK(stored->rows == body);
+    CHECK(stored->rows.size() == total);
+  }
+
+  // ---- 11. duplicate job_id: rejected, no second job, no half job
+  {
+    PrintQueue q;
+    RawPrintAssembler a;
+    RawPrintMeta m = meta;
+    m.job_id = "DUP-1";
+    const char* reason = "";
+
+    CHECK(a.begin(row_bytes, m, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes));
+    PrintJob first;
+    CHECK(a.finish(first));
+    CHECK(q.enqueueMove(std::move(first), 0, reason) == Result::Ok);
+
+    CHECK(a.begin(row_bytes, m, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes));
+    PrintJob dup;
+    CHECK(a.finish(dup));
+    CHECK(q.enqueueMove(std::move(dup), 1, reason) == Result::Busy);
+    CHECK(std::string(reason) == "duplicate_job");
+    CHECK(q.size() == 1);
+    CHECK(q.stats().pending() == 1);
+  }
+
+  // ---- 12. a failed request leaves the queue completely untouched
+  {
+    PrintQueue q;
+    RawPrintAssembler a;
+    CHECK(a.begin(row_bytes * 2, meta, limits, 0) == RawBeginResult::Ok);
+    CHECK(a.write(body.data(), row_bytes));  // short
+    PrintJob job;
+    CHECK(!a.finish(job));
+    CHECK(q.size() == 0);
+    CHECK(q.stats().pending() == 0);
+  }
+}
+
+// Website V1.1: the USB serial channel is an identity handshake, not a console.
+// Every refusal below must also be free of side effects - the parser owns no
+// printer, transport or firmware state at all.
+void testSerialControl() {
+  section("Serial control: read-only gateway_info handshake (V1.1)");
+
+  SerialControl control;
+  control.setIdentity("gw-esp32-a1b2c3", "ESP32-WROOM-32E", "0.2.0");
+
+  const std::string expected =
+      "{\"type\":\"gateway_info\",\"gateway_id\":\"gw-esp32-a1b2c3\","
+      "\"hardware_family\":\"ESP32-WROOM-32E\",\"firmware_version\":\"0.2.0\","
+      "\"protocol_version\":1}";
+
+  // ---- the one accepted command, exact wire shape ----
+  CHECK(control.handleLine("{\"type\":\"gateway_info\"}") == expected);
+  CHECK(control.handleLine(std::string("{\"type\":\"gateway_info\"}\r\n")) == expected);
+  CHECK(control.handleLine(std::string("  {\"type\":\"gateway_info\"}  ")) == expected);
+  // Extra fields are ignored: the client may add whatever it likes.
+  CHECK(control.handleLine("{\"type\":\"gateway_info\",\"nonce\":\"7\"}") == expected);
+  // A fixed schema: one line, no newline inside, version always present.
+  CHECK(expected.find('\n') == std::string::npos);
+  CHECK(expected.find("\"protocol_version\":1") != std::string::npos);
+
+  // ---- human logs on the same UART are not commands ----
+  CHECK(control.handleLine("Remote Thermal Printer Bridge V0.1 - compile/mock verified only")
+            .empty());
+  CHECK(control.handleLine("[ctrl] usb control ready, one command").empty());
+  CHECK(control.handleLine("[HEAP] rawprint free=45000").empty());
+  CHECK(control.handleLine("").empty());
+  CHECK(control.handleLine("   ").empty());
+  CHECK(control.handleLine("gateway_info").empty());
+
+  // ---- refused commands: no identity, no echo ----
+  const char* refused[] = {
+      "{\"type\":\"scan\"}",
+      "{\"type\":\"print\"}",
+      "{\"type\":\"raw\"}",
+      "{\"type\":\"firmware_update\"}",
+      "{\"type\":\"ble_connect\"}",
+      "{\"type\":\"safe_test\"}",
+      "{\"type\":\"unknown\"}",
+      "{\"type\":\"Gateway_Info\"}",  // case matters
+      "{\"type\":\"gateway_info_x\"}",
+  };
+  for (const char* command : refused) {
+    const std::string reply = control.handleLine(command);
+    CHECK(reply.find("\"error\":\"unsupported_command\"") != std::string::npos);
+    CHECK(reply.find("\"type\":\"error\"") != std::string::npos);
+    CHECK(reply.find("gateway_id") == std::string::npos);
+    CHECK(reply.find("protocol_version") != std::string::npos);
+  }
+
+  // ---- malformed input is rejected, not guessed ----
+  CHECK(control.handleLine("{\"type\":").find("malformed_request") != std::string::npos);
+  CHECK(control.handleLine("{}").find("malformed_request") != std::string::npos);
+  CHECK(control.handleLine("{\"command\":\"gateway_info\"}").find("malformed_request") !=
+        std::string::npos);
+  CHECK(control.handleLine("{\"type\":123}").find("malformed_request") != std::string::npos);
+  CHECK(control.handleLine("{\"type\":null}").find("malformed_request") != std::string::npos);
+
+  // ---- oversized line: refused without growing anything ----
+  {
+    std::string big = "{\"type\":\"";
+    big += std::string(300, 'a');
+    big += "\"}";
+    CHECK(big.size() > SerialControl::kMaxLineBytes);
+    CHECK(control.handleLine(big).find("line_too_long") != std::string::npos);
+  }
+
+  // ---- an injection attempt never reaches the reply ----
+  {
+    const std::string reply = control.handleLine("{\"type\":\"gateway_info\",\"x\":\"evil\"}");
+    CHECK(reply == expected);
+    CHECK(reply.find("evil") == std::string::npos);
+    const std::string trick =
+        control.handleLine("{\"type\":\"gateway_info\\\",\\\"x\\\":\\\"evil\"}");
+    CHECK(trick.find("evil") == std::string::npos);
+  }
+
+  // ---- identity is reported verbatim, and can be updated ----
+  control.setIdentity("gw-esp32-ffffff", "ESP32-S3-WROOM-1", "0.3.1");
+  const std::string second = control.handleLine("{\"type\":\"gateway_info\"}");
+  CHECK(second.find("\"gateway_id\":\"gw-esp32-ffffff\"") != std::string::npos);
+  CHECK(second.find("\"hardware_family\":\"ESP32-S3-WROOM-1\"") != std::string::npos);
+  CHECK(second.find("\"firmware_version\":\"0.3.1\"") != std::string::npos);
+
+  // ---- an empty identity is still a valid, parseable line ----
+  {
+    SerialControl blank;
+    const std::string reply = blank.handleLine("{\"type\":\"gateway_info\"}");
+    CHECK(reply.find("\"gateway_id\":\"\"") != std::string::npos);
+    CHECK(reply.find("\"protocol_version\":1") != std::string::npos);
+  }
+}
+
 int main() {
 #if defined(RTB_HOST_EMULATE_WROOM32E)
   printf("=== RTB V0.1 Mock tests (WROOM-32E capability emulation) ===\n");
@@ -1034,12 +1896,20 @@ int main() {
   testSessionEndToEnd();
   testOfflineSimulatedMock();
   testBitmapAndHelpers();
+  testPrintRequestParser();
+  testJsonIntOverflow();
+  testJobIdContract();
+  testJsonPrintEndpointPolicy();
+  testRawPrintOomContainment();
+  testSafeTestRegistry();
+  testRawPrintAssembler();
   testHostCompileConditions();
   testDedupSemanticsById();
   testNotificationCallbackLifetime();
   testWideRowMirror();
   testDiscoveryFallback();
   testPartialPrintSemantics();
+  testSerialControl();
 
   // Protocol runs unchanged over a BLE-emulating Mock and an SPP-emulating Mock.
   section("Transport / Protocol decoupling: TinyProtocol over BLE Mock and Classic Mock");

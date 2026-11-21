@@ -121,15 +121,59 @@ authentication**, the fallback AP `RTB-V0.1-AP` is **open**, and the queue is
 
 ## HTTP debug API (JSON only, not a website)
 `GET /api/status`, `/api/capabilities`, `/api/compatibility`, `/api/queue`,
-`/api/scan`, `GET|POST /api/ota` (501), `POST /api/print`, `/api/mock`,
-`/api/connect`, `/api/disconnect`.
+`/api/scan`, `GET|POST /api/ota` (501), `POST /api/print` (small/legacy),
+`POST /api/print/raw` (official bitmap path), `/api/mock`, `/api/connect`,
+`/api/disconnect`.
+
+Two print entry points, not interchangeable:
+
+* `POST /api/print` is the **small / legacy JSON endpoint**, capped at an 8 KB
+  body (roughly 4 KB of `rows_b64`). It exists for test patterns and small
+  jobs, not for bulk bitmaps.
+* **Large print payloads MUST use `POST /api/print/raw`**: the request body is
+  the raw 1bpp bitmap and the metadata travels in `X-RTB-*` headers, so the
+  Arduino WebServer never buffers-and-copies the payload. The JSON path cannot
+  make that guarantee - the framework allocates the body before any handler
+  runs - which is why its ceiling is deliberately small.
+
+Both accept the same `job_id` contract (max 64 chars, `[A-Za-z0-9-_.:]`, empty
+allowed) and answer `409` for a duplicate.
+
+Gateway (V0.2) endpoints used by the website:
+
+| Call | Purpose |
+| --- | --- |
+| `GET /api/status` | `gateway_id`, `hardware_family`, `firmware_version`, `online`, `supported_transports`, `supported_protocols` |
+| `POST /api/scan` | BLE discovery + a read-only GATT confirmation of the best catalog candidate; `{"duration_ms": 4000, "inspect": true}` |
+| `POST /api/safe-test` | executes one **registry** entry (`SAFE_TEST_TINY_STATUS_V1` = `A3 00`); the body names an id and can never carry bytes |
 
 Example:
 ```bash
 curl -X POST http://<ip>/api/mock -d '{"enabled":true,"offline":false}'
 curl -X POST http://<ip>/api/print -d '{"job_id":"test-1","test":true}'
 curl http://<ip>/api/queue
+curl -X POST http://<ip>/api/safe-test -d '{"safe_test_id":"SAFE_TEST_TINY_STATUS_V1","address":"e3:47:88:2e:e1:2c"}'
 ```
+
+## Website + real gateway (V0.2)
+The website has two gateway sources behind one adapter interface
+(`gateway/adapters.py`): the simulator (default, used by the tests) and the real
+ESP32. The browser never talks to the printer or to the gateway's IP - it calls
+this origin, and the backend talks to the ESP32.
+
+```powershell
+$env:RTB_REAL_GATEWAY_URL = "http://192.168.4.1"   # the ESP32's address
+$env:RTB_REAL_GATEWAY_ID  = "gw-x18-001"          # optional
+python -m gateway.api --host 0.0.0.0 --port 8080
+```
+With `RTB_REAL_GATEWAY_URL` set, `GET /api/gateways` lists the ESP32 first and
+the UI selects it automatically. Without it, everything stays on the simulator,
+so development and the existing test suites are unaffected.
+
+Errors keep their meaning: gateway unreachable → `503 GATEWAY_OFFLINE` (the UI
+says "Gateway is offline"), scan timeout → `504`, contract violation → `502`,
+no printer found → `404 PRINTER_NOT_FOUND`. A failed safe test is **not** any of
+those: it is `TEST_FAILED`, and the case can be retried without a rescan.
 
 Wi-Fi credentials are optional: create `src/app/secrets.h` (gitignored) with
 `RTB_WIFI_SSID` / `RTB_WIFI_PASS`; without it the board starts AP `RTB-V0.1-AP`.

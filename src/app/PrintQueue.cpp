@@ -1,5 +1,7 @@
 #include "app/PrintQueue.h"
 
+#include <utility>
+
 #include "app/Hash.h"
 
 namespace rtb {
@@ -26,6 +28,16 @@ std::string jsonEscape(const std::string& s) {
     out += c;
   }
   return out;
+}
+
+// Free a finished job's bitmap instead of keeping it until the slot is evicted.
+// A done job is only reported through row_count/rows_attempted, so the payload
+// is dead weight: 3 KB per X18 sheet, up to 16 slots = 48 KB on a 320 KB chip
+// where the whole print path has to coexist with Wi-Fi + BLE. Without this the
+// free heap stepped down ~5 KB per print and eventually starved the next
+// request. swap() (not clear()) is what actually returns the block to the heap.
+void releasePayload(PrintJob& job) {
+  std::vector<uint8_t>().swap(job.rows);
 }
 }  // namespace
 
@@ -85,6 +97,25 @@ void PrintQueue::evictTerminalIfFull() {
 }
 
 Result PrintQueue::enqueue(PrintJob& job, uint32_t now_ms, const char*& reason) {
+  // Legacy copy path: the caller keeps its bitmap. The body runs on a copy so
+  // enqueueMove() can still hand ownership over without a second allocation on
+  // the zero-copy path.
+  PrintJob copy = job;
+  const Result result = enqueueMove(std::move(copy), now_ms, reason);
+  // Echo what enqueueMove() derived, so callers can build a response from the
+  // job they still hold.
+  job.dedup_key = copy.dedup_key;
+  job.content_key = copy.content_key;
+  job.content_hash = copy.content_hash;
+  job.dedup_by_id = copy.dedup_by_id;
+  job.state = copy.state;
+  job.created_ms = copy.created_ms;
+  job.retry_after_ms = copy.retry_after_ms;
+  job.attempts = copy.attempts;
+  return result;
+}
+
+Result PrintQueue::enqueueMove(PrintJob&& job, uint32_t now_ms, const char*& reason) {
   clock_ms_ = now_ms;
   reason = "";
   if (job.rows.empty() || job.row_bytes == 0 || job.row_count == 0 ||
@@ -120,7 +151,30 @@ Result PrintQueue::enqueue(PrintJob& job, uint32_t now_ms, const char*& reason) 
   job.rows_attempted = 0;
   job.rows_dispatched = 0;
   job.last_error.clear();
-  jobs_.push_back(job);
+  // Hand the bitmap over instead of copying it. A 64 KB job must exist exactly
+  // once in RAM: /api/print/raw keeps the only other reference in its
+  // assembler, and that one is moved in here. Only `rows` is moved - job_id,
+  // dedup_key and the counters stay in `job` because callers and the host
+  // tests read them back after enqueue().
+  PrintJob stored;
+  stored.job_id = job.job_id;
+  stored.dedup_key = job.dedup_key;
+  stored.content_key = job.content_key;
+  stored.dedup_by_id = job.dedup_by_id;
+  stored.row_bytes = job.row_bytes;
+  stored.row_count = job.row_count;
+  stored.feed_dots = job.feed_dots;
+  stored.content_hash = job.content_hash;
+  stored.created_ms = job.created_ms;
+  stored.retry_after_ms = job.retry_after_ms;
+  stored.attempts = job.attempts;
+  stored.rows_attempted = job.rows_attempted;
+  stored.rows_dispatched = job.rows_dispatched;
+  stored.state = job.state;
+  stored.last_error = job.last_error;
+  stored.rows = std::move(job.rows);
+  jobs_.push_back(std::move(stored));
+  job.rows.clear();  // the caller no longer owns a bitmap
   return Result::Ok;
 }
 
@@ -161,6 +215,7 @@ void PrintQueue::markDone(const std::string& dedup_key) {
     if (jobs_[i].dedup_key == dedup_key) {
       jobs_[i].state = JobState::Done;
       jobs_[i].last_error.clear();
+      releasePayload(jobs_[i]);
       remember(jobs_[i].dedup_key, clock_ms_, jobs_[i].dedup_by_id);
     }
   }
@@ -171,6 +226,7 @@ void PrintQueue::markFailed(const std::string& dedup_key, const char* reason) {
     if (jobs_[i].dedup_key == dedup_key) {
       jobs_[i].state = JobState::Failed;
       jobs_[i].last_error = reason ? reason : "";
+      releasePayload(jobs_[i]);
       remember(jobs_[i].dedup_key, clock_ms_, jobs_[i].dedup_by_id);
     }
   }
@@ -198,6 +254,7 @@ void PrintQueue::markUncertainPartial(const std::string& dedup_key, const char* 
       jobs_[i].rows_attempted = rows_attempted;
       jobs_[i].rows_dispatched = rows_dispatched;
       jobs_[i].retry_after_ms = 0;  // never auto-retried
+      releasePayload(jobs_[i]);
       // Intentionally NOT added to recent_. The frozen job stays in jobs_ but
       // only occupies the job_id namespace, so a manual reprint with a NEW
       // job_id and identical content is accepted (see dedup semantics).

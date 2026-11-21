@@ -93,3 +93,33 @@
 
 #define RTB_ERR_NOT_SUPPORTED_ON_THIS_TARGET "NOT_SUPPORTED_ON_THIS_TARGET"
 #define RTB_ERR_NOT_IMPLEMENTED             "NOT_IMPLEMENTED"
+
+// ---- HTTP print request limits ----------------------------------------------
+// RTB_MAX_JOB_BITMAP_BYTES is the LOGICAL protocol ceiling and must stay equal
+// to the PrintQueue default max_job_bytes (64 KB) so the parser never accepts a
+// bitmap the queue would reject. It is NOT a statement about available heap;
+// the runtime check lives in HeapBudget.h and answers 503, not 413.
+//
+// RTB_HTTP_MAX_BODY_BYTES applies to POST /api/print only, which is the SMALL /
+// LEGACY JSON endpoint. Large print payloads MUST use POST /api/print/raw,
+// because Arduino's WebServer mallocs the whole request body and then copies it
+// into a String BEFORE our handler runs: that peak (2x body) is spent before any
+// limit in this codebase can be evaluated, so a larger JSON ceiling would only
+// move the crash, not prevent it.
+//
+// Why 8 KB:
+//   * the largest legacy JSON job in the field is an X18 sheet, 64 rows x 48 B
+//     = 3072 B -> 4096 base64 chars -> ~4.2 KB of body (576-dot heads: ~6.2 KB),
+//     so 8 KB keeps every existing small client working with ~2x headroom;
+//   * worst-case simultaneous footprint is bounded: transient 2 x 8192 B while
+//     the framework parses, then 8192 B (String) + <= 6146 B (decoded bitmap)
+//     = ~22 KB peak, which fits a WROOM-32E that reports ~45 KB free with
+//     Wi-Fi + BLE up, while still leaving the queue and network stack room.
+#define RTB_MAX_JOB_BITMAP_BYTES (64u * 1024u)
+#define RTB_HTTP_MAX_BODY_BYTES  (8u * 1024u)
+
+// Heap telemetry for hardware validation only ([HEAP] lines on the serial log).
+// Off unless a target opts in with -DRTB_DEBUG_HEAP=1.
+#ifndef RTB_DEBUG_HEAP
+#define RTB_DEBUG_HEAP 0
+#endif

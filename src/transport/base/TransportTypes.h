@@ -91,9 +91,44 @@ using NotificationCallback = std::function<void(const uint8_t* data, size_t len)
 struct ScanRequest {
   uint32_t duration_ms = 3000;
   std::string name_filter;
+  // Advertised-service filter. The Tiny/iPrint family is not consistent:
+  // GB01-class units advertise AE30 while the X18 advertises AF30, so phase 1
+  // must be able to accept either. Two named slots instead of a vector keeps
+  // the request trivially copyable and the call sites obvious.
   std::string service_uuid_filter;
-  size_t max_results = 8;
+  std::string service_uuid_filter_alt;
+  // Was 8. On a desk with a dozen BLE advertisers the result list filled up
+  // before the printer was reached, so discovery failed at random and the
+  // caller backed off for 30 s. Keep everything a short scan can see.
+  size_t max_results = 32;
 };
+
+// Case-insensitive "does this advertised service UUID satisfy the request".
+// Case matters here: the BLE stack returns lowercase UUIDs for some units and
+// uppercase for others, so the previous exact `find("AE30")` was fragile.
+inline bool scanServiceMatches(const ScanRequest& request, const std::string& service_uuid) {
+  if (request.service_uuid_filter.empty() && request.service_uuid_filter_alt.empty()) {
+    return true;
+  }
+  const size_t n = service_uuid.size();
+  std::string lowered;
+  lowered.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    const char c = service_uuid[i];
+    lowered += (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+  }
+  const char* filters[2] = {request.service_uuid_filter.c_str(),
+                            request.service_uuid_filter_alt.c_str()};
+  for (size_t f = 0; f < 2; ++f) {
+    if (!filters[f][0]) continue;
+    std::string needle;
+    for (const char* p = filters[f]; *p; ++p) {
+      needle += (*p >= 'A' && *p <= 'Z') ? static_cast<char>(*p - 'A' + 'a') : *p;
+    }
+    if (lowered.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
 
 struct ScanResult {
   Result result = Result::Ok;

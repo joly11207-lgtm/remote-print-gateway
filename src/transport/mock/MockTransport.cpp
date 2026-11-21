@@ -24,8 +24,7 @@ Result MockTransport::scan(const ScanRequest& request, ScanResult& out) {
     const Endpoint& e = scan_endpoints_[i];
     if (!request.name_filter.empty() &&
         !containsIgnoreCase(e.name, request.name_filter)) continue;
-    if (!request.service_uuid_filter.empty() &&
-        !containsIgnoreCase(e.service_uuid, request.service_uuid_filter)) continue;
+    if (!scanServiceMatches(request, e.service_uuid)) continue;
     out.endpoints.push_back(e);
     if (out.endpoints.size() >= request.max_results) break;
   }

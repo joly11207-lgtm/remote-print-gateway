@@ -87,7 +87,16 @@ class PrintQueue {
 
   // Returns Result::Busy for a duplicate job (reason = "duplicate_job") or a
   // full queue (reason = "queue_full"). The job's dedup_key / hash are filled in.
+  //
+  // Copy semantics: the caller keeps its bitmap. Kept for existing callers and
+  // for host tests that reuse the same PrintJob to build a duplicate.
   Result enqueue(PrintJob& job, uint32_t now_ms, const char*& reason);
+
+  // Zero-copy variant: the queue takes ownership of job.rows, so a 64 KB job
+  // exists exactly once in RAM. Every other field (job_id, dedup_key,
+  // row_count, ...) stays readable on `job` after the call, which is what the
+  // HTTP layer needs to build its response.
+  Result enqueueMove(PrintJob&& job, uint32_t now_ms, const char*& reason);
 
   bool hasPending() const;
   PrintJob* nextPending(uint32_t now_ms);

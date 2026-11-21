@@ -45,9 +45,29 @@ ProtocolFingerprint fingerprintFromEndpoint(const Endpoint& endpoint) {
     }
   }
 
+  // X18 advertises AF30 (its GATT print service is still AE30/AE01/AE02, which
+  // only exists after connecting). Leaving this out is why an X18 showed up as
+  // "unknown / no_matching_evidence" and only matched by a weak name hit.
+  // The BLE stack may report the UUID in either case.
+  if (containsIgnoreCase(endpoint.service_uuid, "af30")) {
+    fp.family = ProtocolFamily::TinyIPrint;
+    fp.confidence = 95;
+    fp.evidence = "advertised_service_af30";
+    return fp;
+  }
+  for (size_t i = 0; i < endpoint.advertised_services.size(); ++i) {
+    if (containsIgnoreCase(endpoint.advertised_services[i], "af30")) {
+      fp.family = ProtocolFamily::TinyIPrint;
+      fp.confidence = 100;
+      fp.evidence = "advertised_service_af30";
+      return fp;
+    }
+  }
+
   static const char* const kTinyNames[] = {
       "GB01", "GB02", "GB03", "GT01", "MX05", "MX06", "MX10", "YT01",
-      "SC03", "iPrint", "Pocket Printer", "WalkPrint", "FunPrint", "D1", "FC02"};
+      "SC03", "iPrint", "Pocket Printer", "WalkPrint", "FunPrint", "D1", "FC02",
+      "X18"};
   for (size_t i = 0; i < sizeof(kTinyNames) / sizeof(kTinyNames[0]); ++i) {
     if (nameMatchesPattern(endpoint.name, kTinyNames[i])) {
       fp.family = ProtocolFamily::TinyIPrint;

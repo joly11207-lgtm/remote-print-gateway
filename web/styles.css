@@ -809,3 +809,24 @@ details.advanced td:first-child {
   * { animation: none !important; transition: none !important; }
 }
 
+/* `hidden` must beat the layout rules above: .facts is a grid, so a hidden
+   facts list (or a hidden dev panel) would otherwise keep painting. */
+[hidden] { display: none !important; }
+
+/* V1.1 USB gateway card. A real board must never look like the simulator, so
+   the connected state gets the brand colour and a heavier rule. */
+.usb-card { border-color: #cfdcf6; }
+
+.usb-state {
+  margin: 16px 0 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+/* Header bar: connected via USB, as opposed to "simulator ready". */
+.bar-status.is-usb {
+  background: #eaf1ff;
+  color: var(--brand);
+  box-shadow: inset 0 0 0 1px #c9daf9;
+}
+

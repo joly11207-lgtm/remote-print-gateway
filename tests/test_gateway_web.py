@@ -114,6 +114,7 @@ def check_static(server: Server) -> None:
     for path, expected_type, expected_text in (
         ("/app.js", "application/javascript", "compatibility/cases"),
         ("/i18n.js", "application/javascript", "I18N_MESSAGES"),
+        ("/serial.js", "application/javascript", "WebSerialGatewayClient"),
         ("/styles.css", "text/css", ":root"),
     ):
         status, content_type, body = server.get(path)
@@ -318,6 +319,100 @@ def check_deploy_copy(messages: dict) -> None:
     print("  G2D = Bluetooth Classic, setup is brand-neutral, demo fallback is gated")
 
 
+def check_web_serial(messages: dict) -> None:
+    section("Web Serial (V1.1): one read-only command, wired pages, localised copy")
+
+    serial = (WEB_DIR / "serial.js").read_text(encoding="utf-8")
+    source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    setup = (WEB_DIR / "setup/index.html").read_text(encoding="utf-8")
+    lab = (WEB_DIR / "lab/index.html").read_text(encoding="utf-8")
+
+    # --- the transport can send exactly one thing -------------------------
+    assert (
+        serial.count('const INFO_REQUEST = \'{"type":"gateway_info"}\';') == 1
+    ), "exactly one request literal"
+    writes = re.findall(r"await this\._writeLine\(([^)]*)\)", serial)
+    assert writes == ["INFO_REQUEST"], f"only gateway_info may be written: {writes}"
+    # The doc comment names the APIs it bans, so scan code only, not prose.
+    code = re.sub(r"/\*.*?\*/", "", serial, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    for forbidden in ("sendRaw", "sendHex", "sendCommand", "eval(", "new Function("):
+        assert forbidden not in code, f"no generic hardware console: {forbidden}"
+    assert "requestPort" in serial and "getPorts" in serial
+    assert "setSignals" in serial, "DTR/RTS must be dropped so the board does not reset"
+    assert "reader.cancel()" in serial and "port.close()" in serial, "the COM port must be released"
+    assert "localStorage" not in serial, "a SerialPort must never be persisted"
+    for state in ("unsupported", "disconnected", "selecting", "opening", "connected", "error"):
+        assert f"{state.upper()}: '{state}'" in serial, f"missing state: {state}"
+
+    # The machine protocol is delimited by a newline and ignores human logs.
+    assert "indexOf('\\n')" in serial
+    assert "text.charAt(0) !== '{'" in serial, "debug log lines must be skipped, not parsed"
+
+    # --- both pages carry the panel --------------------------------------
+    for name, html in (("setup", setup), ("lab", lab)):
+        assert 'data-usb-region' in html, name
+        assert 'src="/serial.js"' in html, name
+        for marker in ("state", "facts", "error", "hint"):
+            assert f'data-usb="{marker}"' in html, (name, marker)
+        for action in ("connect", "disconnect"):
+            assert f'data-usb-action="{action}"' in html, (name, action)
+        # The website still must not name the silicon in its markup: the board
+        # reports hardware_family at runtime.
+        assert "ESP32" not in html, name
+        # Simulator copy stays: V1.1 adds a transport, it does not replace the demo.
+        assert "data-i18n=\"common." in html, name
+
+    # --- no auto-connect on load -----------------------------------------
+    app_code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    app_code = re.sub(r"^\s*//.*$", "", app_code, flags=re.M)
+    assert "requestPort" not in app_code, "the page must never call requestPort itself"
+    assert source.count(".client.connect()") == 1, "only the click handler connects"
+    init_start = source.index("function initUsb()")
+    init_end = source.index("async function connectUsb(")
+    assert ".connect()" not in source[init_start:init_end], "page load must not open a port"
+    assert "state.usb.client.disconnect()" in source, "leaving the page must release the port"
+
+    # A live USB link is a real board and outranks the simulator bar text.
+    assert "usb.state === 'connected'" in source
+    assert "'bar.usb'" in source
+
+    # --- localised copy ---------------------------------------------------
+    used = set(re.findall(r"'(usb\.[\w.]+)'", source))
+    used |= set(re.findall(r'data-i18n="(usb\.[\w.]+)"', setup + lab))
+    used |= set(re.findall(r'data-usb-(?:connected|idle)-label="([\w.]+)"', setup + lab))
+    assert "usb.connect" in used and "usb.disconnect" in used
+    en, zh = messages["en"], messages["zh-CN"]
+    missing = sorted(key for key in used if key not in en or key not in zh)
+    assert not missing, f"untranslated Web Serial keys: {missing}"
+
+    required = [
+        "Connect Gateway via USB",
+        "Disconnect",
+        "Connected",
+        "Not connected",
+        "Selecting a serial device",
+        "Opening the serial connection",
+        "Web Serial is not supported in this browser",
+        "Permission denied",
+        "The device was disconnected",
+        "Invalid Gateway response",
+    ]
+    blob = "\n".join(str(value) for value in en.values())
+    absent = [text for text in required if text not in blob]
+    assert not absent, f"missing Web Serial copy: {absent}"
+    assert "Web Serial" in zh["usb.error.unsupported"] and "不支持" in zh["usb.error.unsupported"]
+    assert "断开连接" in zh["usb.disconnect"]
+
+    # --- the simulator must not regress ----------------------------------
+    assert "bar.simulator" in en and "demo.simulatorTag" not in en
+    assert "common.simulatorTag" in en and "common.simulatorTag" in zh
+    print(
+        f"  {len(used)} usb keys translated, {len(required)} required copy strings, "
+        f"1 outbound command"
+    )
+
+
 def check_dom_wiring() -> None:
     section("app.js only touches elements that exist in the markup")
 
@@ -506,6 +601,7 @@ def main() -> int:
         check_dom_wiring()
         check_i18n(messages)
         check_ui_copy(messages)
+        check_web_serial(messages)
         check_deploy_copy(messages)
         check_vercel_config()
         check_ui_flow_x18(server)
@@ -517,7 +613,10 @@ def main() -> int:
     check_dev_gating(g2d_case)
 
     pages = ", ".join(PAGES)
-    print(f"\nPASS: Web V1 ({len(PAGES)} pages: {pages}; X18/G2D/unknown flows; Vercel deep links)")
+    print(
+        f"\nPASS: Web V1.1 ({len(PAGES)} pages: {pages}; X18/G2D/unknown flows; "
+        f"Vercel deep links; Web Serial identity handshake)"
+    )
     return 0
 
 

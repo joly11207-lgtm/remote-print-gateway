@@ -182,6 +182,7 @@ ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("GET", re.compile(r"^/index\.html$"), "index_html"),
     ("GET", re.compile(r"^/app\.js$"), "app_js"),
     ("GET", re.compile(r"^/i18n\.js$"), "i18n_js"),
+    ("GET", re.compile(r"^/serial\.js$"), "serial_js"),
     ("GET", re.compile(r"^/styles\.css$"), "styles_css"),
     # V1 pages are real HTML paths (folder/index.html), so a deep link and a
     # browser refresh both hit the same file, locally and on static hosting.
@@ -297,6 +298,11 @@ class Api:
 
     def i18n_js(self, params: dict[str, str], payload: dict[str, Any]) -> StaticResponse:
         return self._static("i18n.js", "application/javascript; charset=utf-8")
+
+    def serial_js(self, params: dict[str, str], payload: dict[str, Any]) -> StaticResponse:
+        # V1.1: Web Serial transport. Served from this origin like every other
+        # asset; the page never loads a third-party script.
+        return self._static("serial.js", "application/javascript; charset=utf-8")
 
     def styles_css(self, params: dict[str, str], payload: dict[str, Any]) -> StaticResponse:
         return self._static("styles.css", "text/css; charset=utf-8")

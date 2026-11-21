@@ -185,8 +185,7 @@ Result BleTransport::scan(const ScanRequest& request, ScanResult& out) {
     const Endpoint& ep = impl_->scan_results[i];
     if (!request.name_filter.empty() &&
         ep.name.find(request.name_filter) == std::string::npos) continue;
-    if (!request.service_uuid_filter.empty() &&
-        ep.service_uuid.find(request.service_uuid_filter) == std::string::npos) continue;
+    if (!scanServiceMatches(request, ep.service_uuid)) continue;
     out.endpoints.push_back(ep);
     if (out.endpoints.size() >= request.max_results) break;
   }

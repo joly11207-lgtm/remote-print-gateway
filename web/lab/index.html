@@ -35,6 +35,26 @@
     <p data-i18n="lab.lede">Compatibility workbench. Scan a fixture, then read what the engine decided and why. Fingerprints and technical values stay in this page, not in the consumer flow.</p>
   </div>
 
+  <section class="card usb-card" data-usb-region aria-live="polite"
+           data-usb-connected-label="usb.badge.usb" data-usb-idle-label="lab.usb.none">
+    <div class="card-head">
+      <div>
+        <h2 data-i18n="lab.usb.title">Gateway</h2>
+        <p class="muted" data-usb="state" data-i18n="lab.usb.none">No USB Gateway connected.</p>
+      </div>
+      <span class="badge" data-usb="badge">—</span>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" type="button" data-usb-action="connect" data-i18n="lab.usb.connect">Connect Gateway</button>
+      <button class="btn ghost" type="button" data-usb-action="disconnect" data-i18n="usb.disconnect" hidden>Disconnect</button>
+    </div>
+
+    <p class="note" data-usb="hint" data-i18n="usb.previouslyAuthorized" hidden></p>
+    <dl class="facts" data-usb="facts" hidden></dl>
+    <p class="note error" data-usb="error" hidden></p>
+  </section>
+
   <p class="note">
     <strong data-i18n="common.simulatorTag">Simulator.</strong>
     <span data-i18n="lab.demoBody">The scans below use simulated hardware fixtures. A real Gateway would identify the printer itself; nothing here is a real-hardware result.</span>
@@ -101,6 +121,7 @@
 </footer>
 
 <script src="/i18n.js"></script>
+<script src="/serial.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

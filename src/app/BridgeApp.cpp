@@ -4,12 +4,19 @@
 
 #include <Arduino.h>
 
+#include <string.h>
+
+#include <utility>
 #include <vector>
 
 #include "app/Base64.h"
 #include "app/Discovery.h"
+#include "app/HeapBudget.h"
 #include "app/JsonMini.h"
 #include "app/OtaService.h"
+#include "app/PrintRequestParser.h"
+#include "app/PrintSubmission.h"
+#include "app/SafeTestRegistry.h"
 #include "bitmap/BitmapPipeline.h"
 #include "boards/BoardCapabilities.h"
 #include "config/RtbConfig.h"
@@ -17,7 +24,69 @@
 #include "protocols/base/ProtocolFingerprint.h"
 #include "runtime/PrintSession.h"
 
+#if RTB_DEBUG_HEAP
+#include <esp_heap_caps.h>
+#endif
+
 namespace rtb {
+
+namespace {
+
+// Hardware-validation telemetry only (RTB_DEBUG_HEAP=1). Never part of the
+// normal build: no allocation, no side effects besides the serial line.
+void logHeap(const char* tag) {
+#if RTB_DEBUG_HEAP
+  Serial.printf("[HEAP] %-24s free=%u largest8=%u min_free=%u\n", tag,
+                static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(
+                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
+                static_cast<unsigned>(ESP.getMinFreeHeap()));
+#else
+  (void)tag;
+#endif
+}
+
+// Identity reported by GET /api/status. The gateway row keeps its own id; this
+// one lets an operator match the radio to the board it is talking to.
+const char* hardwareFamilyName() {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  return "ESP32-S3-WROOM-1";
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+  return "ESP32-C3";
+#else
+  return "ESP32-WROOM-32E";
+#endif
+}
+
+std::string gatewayIdValue() {
+  char buffer[32];
+  const uint64_t mac = ESP.getEfuseMac();
+  snprintf(buffer, sizeof(buffer), "gw-esp32-%06llx",
+           static_cast<unsigned long long>(mac & 0xFFFFFFULL));
+  return std::string(buffer);
+}
+
+std::string jsonStringArray(const std::vector<std::string>& values) {
+  std::string out = "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i) out += ",";
+    out += "\"" + jsonEscape(values[i].c_str()) + "\"";
+  }
+  out += "]";
+  return out;
+}
+
+std::string jsonStringArray(const char* const* values, size_t count) {
+  std::string out = "[";
+  for (size_t i = 0; i < count; ++i) {
+    if (i) out += ",";
+    out += "\"" + jsonEscape(values[i]) + "\"";
+  }
+  out += "]";
+  return out;
+}
+
+}  // namespace
 
 const char* printerStateName(PrinterState state) {
   switch (state) {
@@ -56,7 +125,12 @@ void BridgeApp::begin() {
 
   api_.begin();
   server_.begin();
+
+  // Identity for the read-only USB handshake. It is the same id and hardware
+  // family GET /api/status reports, so the browser and the API cannot disagree.
+  serial_control_.setIdentity(gatewayIdValue(), hardwareFamilyName(), RTB_VERSION);
   Serial.println("Remote Thermal Printer Bridge V0.1 - compile/mock verified only");
+  Serial.println("[ctrl] usb control ready, one command: {\"type\":\"gateway_info\"}");
 }
 
 void BridgeApp::setMockMode(bool enabled) {
@@ -133,6 +207,9 @@ void BridgeApp::runPendingJob(uint32_t now_ms) {
 
   queue_.markPrinting(job->dedup_key);
   state_ = PrinterState::Printing;
+  // Heap telemetry for the raw entry point: the bitmap is still owned by the
+  // queue here, so this sample shows "owned + about to be streamed to BLE".
+  logHeap("job_printing");
   PrintSession session(*active_, tiny_, ctx, cfg);
   wifi_.setBleBusy(true);
   Result r = session.begin(now_ms);
@@ -145,6 +222,7 @@ void BridgeApp::runPendingJob(uint32_t now_ms) {
   const JobOutcome outcome = classifyJobOutcome(r, rows_attempted);
   if (outcome == JobOutcome::Complete) {
     queue_.markDone(job->dedup_key);
+    logHeap("job_done");
     // Disconnect after each job so Wi-Fi gets the shared 2.4 GHz radio back.
     active_->disconnect();
     state_ = PrinterState::Offline;
@@ -175,6 +253,7 @@ void BridgeApp::runPendingJob(uint32_t now_ms) {
 
 void BridgeApp::tick() {
   const uint32_t now = millis();
+  pollSerialControl();
   wifi_.tick(now);
   server_.handleClient();
 
@@ -191,6 +270,48 @@ void BridgeApp::tick() {
   if (state_ == PrinterState::Connected && now - last_keepalive_ms_ > 30000) {
     last_keepalive_ms_ = now;
     tiny_.statusRequest(*active_);
+  }
+}
+
+// V1.1 USB identity channel. Strictly bounded: a few bytes per tick, one fixed
+// line buffer, and only one command that can produce a reply. A client that
+// floods the port cannot starve the print queue or the HTTP server, and it can
+// never reach a printer, BLE scan or firmware path from here.
+void BridgeApp::pollSerialControl() {
+  size_t budget = 64;
+  while (budget-- > 0) {
+    if (Serial.available() <= 0) break;
+    const int value = Serial.read();
+    if (value < 0) break;
+    const char c = static_cast<char>(value);
+
+    if (c == '\n') {
+      if (serial_discard_) {
+        serial_discard_ = false;
+        serial_line_len_ = 0;
+        Serial.print("{\"type\":\"error\",\"error\":\"line_too_long\",\"protocol_version\":");
+        Serial.print(SerialControl::kProtocolVersion);
+        Serial.println("\"}");
+      } else if (serial_line_len_ > 0) {
+        serial_line_[serial_line_len_] = '\0';
+        const std::string reply = serial_control_.handleLine(serial_line_, serial_line_len_);
+        if (!reply.empty()) {
+          Serial.print(reply.c_str());
+          Serial.print('\n');
+        }
+        serial_line_len_ = 0;
+      }
+      continue;
+    }
+
+    if (serial_discard_) continue;
+    if (serial_line_len_ >= SerialControl::kMaxLineBytes) {
+      // Over the ceiling: drop the rest of the line, answer once on newline.
+      serial_discard_ = true;
+      serial_line_len_ = 0;
+      continue;
+    }
+    serial_line_[serial_line_len_++] = c;
   }
 }
 
@@ -217,6 +338,14 @@ std::string BridgeApp::statusJson() const {
   std::string out = "{\"version\":\"" + std::string(RTB_VERSION) + "\"";
   out += ",\"target\":\"" + std::string(RTB_TARGET_ID) + "\"";
   out += ",\"chip\":\"" + std::string(caps.chip_name) + "\"";
+  // Gateway identity contract for the website adapter (V0.2). `online` is
+  // trivially true: this response is being served right now.
+  out += ",\"gateway_id\":\"" + gatewayIdValue() + "\"";
+  out += ",\"hardware_family\":\"" + std::string(hardwareFamilyName()) + "\"";
+  out += ",\"online\":true";
+  out += ",\"status\":\"online\"";
+  out += ",\"supported_transports\":[\"ble\"]";
+  out += ",\"supported_protocols\":[\"tiny_iprint\"]";
   out += ",\"wifi\":\"" + std::string(wifi_.modeName()) + "\"";
   out += ",\"ip\":\"" + wifi_.localIp() + "\"";
   out += ",\"printer_state\":\"" + std::string(printerStateName(state_)) + "\"";
@@ -247,7 +376,9 @@ std::string BridgeApp::queueJson() const {
 
 std::string BridgeApp::scanJson() {
   ScanRequest request;
-  request.duration_ms = 1500;
+  // Same window as discovery: a 1.5 s scan was short enough to miss a printer
+  // that advertises on a slow interval, which made /api/scan look flaky.
+  request.duration_ms = 3000;
   ScanResult found;
   const Result r = active_->scan(request, found);
   std::string out = "{\"result\":\"" + std::string(resultName(r)) + "\"";
@@ -270,40 +401,209 @@ std::string BridgeApp::scanJson() {
   return out;
 }
 
-std::string BridgeApp::submitPrintJson(const std::string& body) {
-  const bool test_pattern = jsonBoolField(body, "test", false);
-  const std::string job_id = jsonStringField(body, "job_id");
-  const std::string rows_b64 = jsonStringField(body, "rows_b64");
-  int row_bytes = jsonIntField(body, "row_bytes", 0);
-  if (row_bytes <= 0) row_bytes = profile_ ? (profile_->width_dots + 7) / 8 : 48;
-  int feed = jsonIntField(body, "feed", profile_ ? profile_->feed_dots : 64);
-  if (feed < 0) feed = 0;
+std::string BridgeApp::scanDetailJson(const std::string& body) {
+  int duration = jsonIntField(body, "duration_ms", 4000);
+  if (duration < 500) duration = 500;
+  if (duration > 10000) duration = 10000;
+  const bool inspect = jsonBoolField(body, "inspect", true);
 
-  std::vector<uint8_t> rows;
-  if (test_pattern) {
-    makeTestPattern(static_cast<size_t>(row_bytes), 24, rows);
-  } else if (!base64Decode(rows_b64, rows)) {
-    return "{\"ok\":false,\"error\":\"invalid_base64\"}";
-  }
-  if (rows.empty() || rows.size() % static_cast<size_t>(row_bytes) != 0) {
-    return "{\"ok\":false,\"error\":\"invalid_bitmap\"}";
+  ScanRequest request;
+  request.duration_ms = static_cast<uint32_t>(duration);
+  ScanResult found;
+  const uint32_t started = millis();
+  wifi_.setBleBusy(true);
+  const Result scan_result = active_->scan(request, found);
+  wifi_.setBleBusy(false);
+
+  // Only a catalog-matched candidate is worth a connection; among those, prefer
+  // the one with the strongest advertisement evidence.
+  int best = -1;
+  int best_confidence = -1;
+  for (size_t i = 0; i < found.endpoints.size(); ++i) {
+    const CatalogMatch candidate = DeviceCatalog::match(found.endpoints[i]);
+    if (!candidate.profile) continue;
+    const bool better = candidate.fingerprint.confidence > best_confidence ||
+                        (candidate.fingerprint.confidence == best_confidence &&
+                         (best < 0 || found.endpoints[i].rssi > found.endpoints[best].rssi));
+    if (better) {
+      best = static_cast<int>(i);
+      best_confidence = candidate.fingerprint.confidence;
+    }
   }
 
-  PrintJob job;
-  job.job_id = job_id;
-  job.rows = rows;
-  job.row_bytes = static_cast<size_t>(row_bytes);
-  job.row_count = rows.size() / static_cast<size_t>(row_bytes);
-  job.feed_dots = static_cast<uint16_t>(feed);
-  const char* reason = "";
-  const Result r = queue_.enqueue(job, millis(), reason);
-  std::string out = "{\"ok\":" + std::string(r == Result::Ok ? "true" : "false");
-  out += ",\"result\":\"" + std::string(resultName(r)) + "\"";
-  out += ",\"reason\":\"" + jsonEscape(reason) + "\"";
-  out += ",\"job_id\":\"" + jsonEscape(job.job_id.c_str()) + "\"";
-  out += ",\"dedup_key\":\"" + jsonEscape(job.dedup_key.c_str()) + "\"";
-  out += ",\"rows\":" + std::to_string(job.row_count) + "}";
+  // GATT evidence: connect() looks up the profile's service + write + notify
+  // characteristics, so a successful connect proves AE30/AE01/AE02 exist. The
+  // link is dropped immediately - this is a read-only identification step.
+  bool verified = false;
+  // Never pull the radio away from a job that is actually printing.
+  if (inspect && state_ != PrinterState::Printing && best >= 0 &&
+      !found.endpoints[best].address.empty()) {
+    const CatalogMatch chosen = DeviceCatalog::match(found.endpoints[best]);
+    const Endpoint prepared = prepareConnectEndpoint(found.endpoints[best], *chosen.profile);
+    wifi_.setBleBusy(true);
+    verified = active_->connect(prepared) == Result::Ok;
+    active_->disconnect();
+    wifi_.setBleBusy(false);
+  }
+
+  const uint32_t elapsed = millis() - started;
+  std::string out = "{\"result\":\"" + std::string(resultName(scan_result)) + "\"";
+  out += ",\"transport\":\"" + std::string(active_->name()) + "\"";
+  out += ",\"elapsed_ms\":" + std::to_string(elapsed);
+  out += ",\"scanned\":" + std::to_string(found.endpoints.size());
+  out += ",\"devices\":[";
+  for (size_t i = 0; i < found.endpoints.size(); ++i) {
+    const Endpoint& ep = found.endpoints[i];
+    const CatalogMatch m = DeviceCatalog::match(ep);
+    const bool is_best = static_cast<int>(i) == best;
+    if (i) out += ",";
+    out += "{\"name\":\"" + jsonEscape(ep.name.c_str()) + "\"";
+    out += ",\"address\":\"" + jsonEscape(ep.address.c_str()) + "\"";
+    out += ",\"rssi\":" + std::to_string(ep.rssi);
+    out += ",\"transport\":\"" + std::string(active_->name()) + "\"";
+    out += ",\"advertised_services\":" + jsonStringArray(ep.advertised_services);
+    out += ",\"gatt_verified\":" + std::string(is_best && verified ? "true" : "false");
+    if (is_best && verified && m.profile) {
+      const char* services[] = {m.profile->service_uuid};
+      const char* writes[] = {m.profile->write_uuid};
+      const char* notifies[] = {m.profile->notify_uuid};
+      out += ",\"gatt_services\":" + jsonStringArray(services, 1);
+      out += ",\"write_characteristics\":" + jsonStringArray(writes, 1);
+      out += ",\"notify_characteristics\":" + jsonStringArray(notifies, 1);
+    }
+    out += ",\"model_id\":\"" +
+           std::string(m.profile ? m.profile->model_id : "unmatched") + "\"";
+    out += ",\"fingerprint\":\"" +
+           std::string(protocolFamilyName(m.fingerprint.family)) + "\"";
+    out += ",\"confidence\":" + std::to_string(m.fingerprint.confidence);
+    out += "}";
+  }
+  out += "]}";
   return out;
+}
+
+std::string BridgeApp::safeTestJson(const std::string& body, int& http_status) {
+  http_status = 200;
+
+  // The caller names an entry; it never supplies bytes. Unknown ids are refused
+  // here, so the HTTP surface cannot be used as a raw command channel.
+  const std::string safe_test_id = jsonStringField(body, "safe_test_id");
+  const SafeTestSpec* spec = findSafeTest(safe_test_id);
+  if (spec == nullptr || strcmp(spec->protocol, "tiny_iprint") != 0 || spec->moves_paper) {
+    http_status = 422;
+    return std::string("{\"ok\":false,\"error\":\"safe_test_not_allowed\"}");
+  }
+
+  const std::string address = jsonStringField(body, "address");
+  if (address.empty()) {
+    http_status = 400;
+    return std::string("{\"ok\":false,\"error\":\"invalid_request\"}");
+  }
+  if (state_ == PrinterState::Printing) {
+    // A status query must not interleave with print traffic.
+    http_status = 409;
+    return std::string("{\"ok\":false,\"error\":\"printer_busy\"}");
+  }
+
+  const uint32_t started = millis();
+  Endpoint target;
+  target.address = address;
+  if (profile_ != nullptr) target = prepareConnectEndpoint(target, *profile_);
+
+  wifi_.setBleBusy(true);
+  const Result connected = active_->connect(target);
+  if (connected != Result::Ok) {
+    wifi_.setBleBusy(false);
+    std::string out = "{\"ok\":true,\"safe_test_id\":\"" + jsonEscape(safe_test_id.c_str()) + "\"";
+    out += ",\"status\":\"failed\",\"reason\":\"connect_failed\"";
+    out += ",\"error\":\"" + std::string(resultName(connected)) + "\"";
+    out += ",\"elapsed_ms\":" + std::to_string(millis() - started);
+    out += "}";
+    return out;
+  }
+
+  ProtocolContext ctx;
+  if (profile_ != nullptr) ctx = makeContext(*profile_);
+  SessionConfig config;
+  config.row_delay_ms = 10;
+  config.command_delay_ms = 10;
+  config.status_poll_ms = 30000;
+
+  PrintSession session(*active_, tiny_, ctx, config);
+  const Result begun = session.begin(millis());
+  PrinterStatus status;
+  bool received = false;
+  const uint32_t deadline = millis() + 1500;
+  while (begun == Result::Ok && static_cast<int32_t>(deadline - millis()) > 0) {
+    const PrinterStatus& live = session.status();
+    if (live.valid && strcmp(live.source_opcode, "A3") == 0) {
+      status = live;
+      received = true;
+      break;
+    }
+    delay(5);
+  }
+  session.end();
+  active_->disconnect();
+  wifi_.setBleBusy(false);
+
+  std::string out = "{\"ok\":true,\"safe_test_id\":\"" + jsonEscape(safe_test_id.c_str()) + "\"";
+  out += ",\"opcode\":\"A3\"";
+  out += ",\"elapsed_ms\":" + std::to_string(millis() - started);
+  if (!received) {
+    out += ",\"status\":\"failed\",\"reason\":\"";
+    out += (begun == Result::Ok ? "no_status_response" : resultName(begun));
+    out += "\"}";
+    return out;
+  }
+  out += ",\"status\":\"" + std::string(status.ready ? "passed" : "failed") + "\"";
+  out += ",\"ready\":" + std::string(status.ready ? "true" : "false");
+  out += ",\"raw_status\":" + std::to_string(status.raw);
+  out += ",\"paper\":\"" + std::string(status.no_paper ? "empty" : "ok") + "\"";
+  out += ",\"cover\":\"" + std::string(status.cover_open ? "open" : "closed") + "\"";
+  out += ",\"thermal\":\"" + std::string(status.overheat ? "hot" : "ok") + "\"";
+  out += "}";
+  return out;
+}
+
+BridgeApp::PrintDefaults BridgeApp::printDefaults() const {
+  PrintDefaults defaults;
+  defaults.row_bytes =
+      profile_ ? static_cast<size_t>((profile_->width_dots + 7) / 8) : 48u;
+  defaults.feed_dots =
+      profile_ ? profile_->feed_dots : static_cast<uint16_t>(64);
+  return defaults;
+}
+
+Result BridgeApp::enqueueJob(PrintJob& job, const char*& reason) {
+  // Zero-copy: the queue takes the bitmap, the caller keeps the identifiers.
+  return queue_.enqueueMove(std::move(job), millis(), reason);
+}
+
+std::string BridgeApp::submitPrintJson(const char* body, size_t body_len,
+                                       int& http_status) {
+  http_status = 200;
+
+  // Defaults come from the resolved profile (48 bytes / 64 dots when unknown).
+  const PrintDefaults defaults = printDefaults();
+
+  // Logical ceilings (8 KB body / 64 KB bitmap) plus the LIVE heap budget:
+  // a legal payload that does not fit right now answers 503, not 413.
+  PrintLimits limits;
+  limits.heap_budget_bytes = httpPrintHeapBudget();
+
+  logHeap("print_request_received");
+
+  // The parse + enqueue + response live in PrintSubmission.cpp so the host tests
+  // run the exact same code; only the heap sample and millis() are Arduino-side.
+  const PrintSubmitOutcome outcome =
+      submitJsonPrint(body, body_len, limits, defaults.row_bytes, defaults.feed_dots,
+                      queue_, millis());
+
+  logHeap("print_request_enqueued");
+
+  http_status = outcome.http_status;
+  return outcome.body;
 }
 
 std::string BridgeApp::setMockJson(const std::string& body) {

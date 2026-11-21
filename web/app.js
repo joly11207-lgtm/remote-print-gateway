@@ -55,6 +55,7 @@ const state = {
   notice: null,
   device: null,
   demo: false,  // true after the "simulator ready" fallback rendered
+  usb: null,    // Web Serial panel: { client, regions, authorized }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -218,6 +219,17 @@ function setDemoBarStatus() {
 function setBarStatus(gateway) {
   const node = $('bar-gateway');
   if (!node) return;
+
+  // A live USB link is a real board, so it wins over everything the API says
+  // about the (simulated) deployment gateway. An authorised-but-closed port
+  // never reaches this branch: only an open port sets state 'connected'.
+  const usb = state.usb ? usbSnapshot() : null;
+  if (usb && usb.state === 'connected') {
+    node.textContent = I18N.t('bar.usb');
+    node.className = 'bar-status is-usb';
+    return;
+  }
+
   const online = Boolean(gateway) && gateway.status === 'online';
   // Never let a simulator look like a real board: the bar says so explicitly.
   const simulated = Boolean(gateway) && gateway.mode !== 'real';
@@ -290,6 +302,206 @@ function formatTime(iso) {
 }
 
 // --------------------------------------------------------------------------- //
+// USB gateway (Web Serial identity handshake, read-only)
+// --------------------------------------------------------------------------- //
+// serial.js owns the transport and its state machine. This section only maps
+// that state to localised copy and buttons: no compatibility decision is made
+// here, and V1.1 never scans a printer over USB.
+const USB_STATE_KEYS = {
+  unsupported: 'usb.state.unsupported',
+  disconnected: 'usb.state.disconnected',
+  selecting: 'usb.state.selecting',
+  opening: 'usb.state.opening',
+  connected: 'usb.state.connected',
+  error: 'usb.state.error',
+};
+
+// Transport error code -> user copy. Codes stay stable; the words do not.
+const USB_ERROR_KEYS = {
+  unsupported: 'usb.error.unsupported',
+  permission_denied: 'usb.error.permission',
+  request_failed: 'usb.error.open',
+  open_failed: 'usb.error.open',
+  busy: 'usb.error.busy',
+  timeout: 'usb.error.timeout',
+  invalid_response: 'usb.error.badResponse',
+  wrong_type: 'usb.error.badResponse',
+  gateway_refused: 'usb.error.badResponse',
+  device_lost: 'usb.error.deviceLost',
+};
+
+function usbClient() {
+  if (!state.usb) {
+    const Serial = typeof WebSerialGatewayClient === 'function' ? WebSerialGatewayClient : null;
+    state.usb = {
+      // No serial.js on this page (or no Web Serial in this browser): the
+      // panel still renders, as "unsupported", instead of throwing.
+      client: Serial ? new Serial() : null,
+      regions: Array.from(document.querySelectorAll('[data-usb-region]')),
+      authorized: false,
+    };
+  }
+  return state.usb;
+}
+
+function usbSnapshot() {
+  const usb = state && state.usb;
+  if (usb && usb.client) return usb.client.snapshot();
+  return { supported: false, state: 'unsupported', info: null, error: null };
+}
+
+function usbNode(region, name) {
+  return region.querySelector(`[data-usb="${name}"]`);
+}
+
+function renderUsb() {
+  const usb = state.usb;
+  if (!usb || !usb.regions.length) return;
+
+  const snap = usbSnapshot();
+  const busy = snap.state === 'selecting' || snap.state === 'opening';
+  const connected = snap.state === 'connected';
+
+  for (const region of usb.regions) {
+    // A page may word the idle/connected states its own way (/lab says "No USB
+    // Gateway connected." where /setup says "Gateway not connected").
+    const idleKey = region.getAttribute('data-usb-idle-label');
+    const connectedKey = region.getAttribute('data-usb-connected-label');
+
+    const stateNode = usbNode(region, 'state');
+    if (stateNode) {
+      const key =
+        snap.state === 'disconnected' && idleKey
+          ? idleKey
+          : USB_STATE_KEYS[snap.state] || 'usb.state.disconnected';
+      stateNode.textContent = I18N.t(key);
+    }
+
+    const badge = usbNode(region, 'badge');
+    if (badge) {
+      const key = connected
+        ? connectedKey || 'usb.badge.connected'
+        : 'usb.badge.disconnected';
+      badge.textContent = I18N.t(key);
+      badge.className = `badge is-${connected ? 'online' : 'demo'}`;
+    }
+
+    const facts = usbNode(region, 'facts');
+    if (facts) {
+      const info = snap.info;
+      if (info) {
+        facts.replaceChildren(
+          fact(I18N.t('usb.fact.gatewayId'), info.gateway_id),
+          fact(I18N.t('usb.fact.hardware'), info.hardware_family),
+          fact(I18N.t('usb.fact.firmware'), info.firmware_version),
+          fact(I18N.t('usb.fact.connection'), I18N.t('usb.connection.usb'))
+        );
+        facts.hidden = false;
+      } else {
+        facts.replaceChildren();
+        facts.hidden = true;
+      }
+    }
+
+    const error = usbNode(region, 'error');
+    if (error) {
+      if (snap.state === 'unsupported') {
+        error.textContent = I18N.t('usb.error.unsupported');
+        error.hidden = false;
+      } else if (snap.state === 'error' && snap.error) {
+        error.textContent = I18N.t(USB_ERROR_KEYS[snap.error.code] || 'usb.error.open');
+        error.hidden = false;
+      } else {
+        clearError(error);
+      }
+    }
+
+    const hint = usbNode(region, 'hint');
+    if (hint) hint.hidden = !(usb.authorized && !connected);
+
+    const connect = region.querySelector('[data-usb-action="connect"]');
+    if (connect) {
+      connect.hidden = connected;
+      connect.disabled = busy || snap.state === 'unsupported';
+      connect.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+    const disconnect = region.querySelector('[data-usb-action="disconnect"]');
+    if (disconnect) {
+      disconnect.hidden = !connected;
+      disconnect.disabled = busy;
+    }
+  }
+}
+
+function initUsb() {
+  const usb = usbClient();
+  if (!usb.regions.length) return;  // this page has no USB card
+
+  for (const region of usb.regions) {
+    const connect = region.querySelector('[data-usb-action="connect"]');
+    if (connect) connect.addEventListener('click', connectUsb);
+    const disconnect = region.querySelector('[data-usb-action="disconnect"]');
+    if (disconnect) disconnect.addEventListener('click', disconnectUsb);
+  }
+
+  if (!usb.client) {
+    renderUsb();  // the snapshot already reads "unsupported"
+    return;
+  }
+
+  usb.client.onState(() => {
+    renderUsb();
+    setBarStatus(state.gateway);
+  });
+
+  // A port the user authorised on an earlier visit is a hint only: V1.1 always
+  // requires a click, it never opens a port on page load.
+  usb.client.hasAuthorizedPort().then((authorized) => {
+    usb.authorized = authorized;
+    renderUsb();
+  });
+
+  // Leaving the page must release the COM port, not strand a reader on it.
+  window.addEventListener('pagehide', () => {
+    if (state.usb && state.usb.client) state.usb.client.disconnect();
+  });
+
+  renderUsb();
+}
+
+// Only a real click reaches requestPort(): the transport calls it as its first
+// await, so the user gesture is still valid when the picker opens.
+async function connectUsb(event) {
+  const button = event.currentTarget;
+  const usb = usbClient();
+  if (!usb.client) return;
+  button.disabled = true;
+  try {
+    await usb.client.connect();
+  } catch (error) {
+    // The transport already recorded a stable code; renderUsb() localises it.
+  } finally {
+    button.disabled = false;
+    renderUsb();
+    setBarStatus(state.gateway);
+  }
+}
+
+async function disconnectUsb(event) {
+  const button = event.currentTarget;
+  const usb = usbClient();
+  if (!usb.client) return;
+  button.disabled = true;
+  try {
+    await usb.client.disconnect();
+  } finally {
+    button.disabled = false;
+    renderUsb();
+    setBarStatus(state.gateway);
+  }
+}
+
+// --------------------------------------------------------------------------- //
 // flow: add printer -> rescue form -> scan
 // --------------------------------------------------------------------------- //
 function bindDeviceButtons() {
@@ -322,6 +534,7 @@ function initAdd() {
 function initLab() {
   bindDeviceButtons();
   $('btn-analyze').addEventListener('click', analyzeInLab);
+  initUsb();
 }
 
 async function analyzeInLab(event) {
@@ -348,6 +561,11 @@ async function analyzeInLab(event) {
 // Pages whose content is static markup. They share the gateway bar, which
 // loadGateway() fills in for every page.
 function initStaticPage() {}
+
+// Setup: documentation steps plus the one real operation (USB identity).
+function initSetup() {
+  initUsb();
+}
 
 function selectDevice(key) {
   state.device = state.device === key ? null : key;
@@ -1004,7 +1222,7 @@ function resetFlow() {
 // One script for every page: <body data-page="..."> picks the initialiser.
 const PAGE_INIT = {
   home: initStaticPage,
-  setup: initStaticPage,
+  setup: initSetup,
   lab: initLab,
   printers: initStaticPage,
   add: initAdd,
@@ -1023,6 +1241,7 @@ function rerenderForLanguage() {
   } else {
     setBarStatus(null);
   }
+  renderUsb();
   if (state.report) renderResult(state.report, state.notice || undefined);
 }
 

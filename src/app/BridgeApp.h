@@ -9,6 +9,7 @@
 #include "app/CompatibilityReport.h"
 #include "app/HttpDebugApi.h"
 #include "app/PrintQueue.h"
+#include "app/SerialControl.h"
 #include "app/WifiService.h"
 #include "printers/catalog/DeviceProfile.h"
 #include "protocols/escpos/EscPosProtocol.h"
@@ -42,8 +43,44 @@ class BridgeApp {
   std::string statusJson() const;
   std::string compatibilityJson() const;
   std::string queueJson() const;
+  // Legacy GET /api/scan: discovery list only (name/address/rssi/fingerprint).
+  // No connection is made, so it cannot report GATT evidence.
   std::string scanJson();
-  std::string submitPrintJson(const std::string& body);
+
+  // V0.2 gateway scan for the website: discovery + a GATT confirmation of the
+  // best catalog-matched candidate. The confirmation is a real connect(), which
+  // verifies the profile's service/write/notify characteristics exist - that is
+  // the evidence the compatibility engine needs. No printing, no writes.
+  // `body` accepts {"duration_ms": N, "inspect": bool}.
+  std::string scanDetailJson(const std::string& body);
+
+  // V0.2 safe test: executes ONE registry entry (SafeTestRegistry.h), never
+  // bytes from the caller. `http_status` is 200 for an executed test (passed or
+  // failed), 422 when the id is not in the registry, 400 for a malformed body.
+  std::string safeTestJson(const std::string& body, int& http_status);
+
+  // `body` is taken as a buffer, NOT as a std::string: the caller's HTTP body is
+  // already in RAM and must never be copied (that copy was the allocation that
+  // failed and aborted the chip).
+  // SMALL / LEGACY endpoint: RTB_HTTP_MAX_BODY_BYTES (8 KB) is its ceiling.
+  // Large payloads MUST use POST /api/print/raw.
+  // `http_status` is an OUT parameter: 200 success, 400 malformed/invalid,
+  // 409 duplicate job, 413 over the configured ceiling, 503 legal payload that
+  // does not fit in the current heap. The caller maps it to the response.
+  std::string submitPrintJson(const char* body, size_t body_len, int& http_status);
+
+  // Defaults resolved from the active DeviceProfile (48 bytes / 64 dots when no
+  // profile is known yet). Used by both print entry points so /api/print and
+  // /api/print/raw cannot drift apart.
+  struct PrintDefaults {
+    size_t row_bytes;
+    uint16_t feed_dots;
+  };
+  PrintDefaults printDefaults() const;
+
+  // Single enqueue path for every entry point. The queue takes ownership of
+  // job.rows, so the caller's bitmap is gone after a successful call.
+  Result enqueueJob(PrintJob& job, const char*& reason);
   std::string setMockJson(const std::string& body);
   std::string connectJson(const std::string& body);
   std::string otaJson() const;
@@ -59,6 +96,10 @@ class BridgeApp {
   void runPendingJob(uint32_t now_ms);
   void setMockMode(bool enabled);
   CompatibilityInput makeCompatibilityInput() const;
+
+  // V1.1 read-only USB identity channel. Bounded, non-blocking, and it only
+  // ever answers gateway_info (see app/SerialControl.h).
+  void pollSerialControl();
 
   WebServer server_;
   WifiService wifi_;
@@ -82,6 +123,13 @@ class BridgeApp {
   uint32_t backoff_ms_ = 2000;
   uint32_t last_keepalive_ms_ = 0;
   bool mock_mode_ = false;
+
+  // Serial control state. The line buffer is fixed size and lives in the
+  // object: a client cannot make the firmware allocate per request.
+  SerialControl serial_control_;
+  char serial_line_[SerialControl::kMaxLineBytes + 1];
+  size_t serial_line_len_ = 0;
+  bool serial_discard_ = false;
 };
 
 }  // namespace rtb

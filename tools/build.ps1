@@ -16,6 +16,34 @@ New-Item -ItemType Directory -Force -Path $Mirror, $logDir | Out-Null
 & robocopy.exe $root $Mirror /E /PURGE /XD .git .pio build __pycache__ /NFL /NDL /NJH /NJS /NP | Out-Null
 
 $env:PLATFORMIO_CORE_DIR = $CoreDir
+
+# The patch step below is fail-closed and needs the framework package to exist.
+# On a fresh machine / new PLATFORMIO_CORE_DIR the package is installed only by
+# PlatformIO itself, which used to happen AFTER the patch step - so the very
+# first build died on "framework package not found". Resolve every env's
+# packages first (idempotent: a complete core dir is a no-op), then patch, then
+# build, so a clean machine needs exactly one command.
+Write-Host "=== INSTALL PLATFORM PACKAGES ==="
+foreach ($envName in $Envs) {
+  & python -m platformio pkg install --project-dir $Mirror -e $envName
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "--- package install FAILED for $envName, aborting build ---" -ForegroundColor Red
+    exit 1
+  }
+}
+
+# The WebServer raw-stream fixes live in patches/*.patch and are applied to the
+# PlatformIO framework package before anything is compiled. This is what makes
+# the patch reproducible: a fresh machine, a re-installed package or a new
+# PLATFORMIO_CORE_DIR gets patched automatically. Any version or baseline
+# mismatch aborts the build instead of silently compiling unpatched sources.
+Write-Host "=== APPLY FRAMEWORK PATCHES ==="
+& python (Join-Path $root "tools\apply_framework_patches.py") --core-dir $CoreDir
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "--- framework patch step FAILED, aborting build ---" -ForegroundColor Red
+  exit 1
+}
+
 $results = @()
 
 foreach ($envName in $Envs) {

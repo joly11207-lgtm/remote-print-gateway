@@ -37,7 +37,7 @@
 
   <p class="note">
     <strong data-i18n="common.demoTag">Demo / Simulator.</strong>
-    <span data-i18n="setup.demoBody">Setup hardware access is not wired up in this build. Web Serial support coming next; until then these steps describe the real flow without touching a device.</span>
+    <span data-i18n="setup.demoBody">Step 1 is real: the browser opens the USB serial port you pick and asks the Gateway who it is. That handshake is read-only, and Wi-Fi setup or firmware updates are still not wired up.</span>
   </p>
 
   <section class="card gateway-card" id="gateway-card" aria-live="polite">
@@ -56,10 +56,25 @@
   </section>
 
   <div class="stack">
-    <section class="card">
-      <h2 data-i18n="setup.step1.title">1. Connect Gateway</h2>
-      <p data-i18n="setup.step1.body">Plug your Gateway board into USB and wait for the status light.</p>
-      <p class="note" data-i18n="setup.step1.status">Status: Demo — no USB device is opened by this page.</p>
+    <section class="card usb-card" data-usb-region aria-live="polite">
+      <div class="card-head">
+        <div>
+          <h2 data-i18n="setup.step1.title">1. Connect Gateway</h2>
+          <p data-i18n="setup.step1.body">Plug your Gateway board into USB and wait for the status light.</p>
+        </div>
+        <span class="badge" data-usb="badge">—</span>
+      </div>
+
+      <p class="usb-state" data-usb="state" data-i18n="usb.state.disconnected">Gateway not connected</p>
+
+      <div class="actions">
+        <button class="btn primary" type="button" data-usb-action="connect" data-i18n="usb.connect">Connect Gateway via USB</button>
+        <button class="btn ghost" type="button" data-usb-action="disconnect" data-i18n="usb.disconnect" hidden>Disconnect</button>
+      </div>
+
+      <p class="note" data-usb="hint" data-i18n="usb.previouslyAuthorized" hidden></p>
+      <dl class="facts" data-usb="facts" hidden></dl>
+      <p class="note error" data-usb="error" hidden></p>
     </section>
 
     <section class="card">
@@ -79,7 +94,7 @@
     <section class="card">
       <h2 data-i18n="setup.step4.title">4. Wi-Fi Setup</h2>
       <p data-i18n="setup.step4.body">Send the local network name and password to the board so it appears on your network.</p>
-      <p class="note" data-i18n="setup.step4.status">Status: Coming soon — Web Serial support coming next. No credentials are collected on this page.</p>
+      <p class="note" data-i18n="setup.step4.status">Status: Coming soon — the USB handshake is read-only and no credentials are collected on this page.</p>
     </section>
 
     <section class="card">
@@ -99,6 +114,7 @@
 </footer>
 
 <script src="/i18n.js"></script>
+<script src="/serial.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

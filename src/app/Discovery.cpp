@@ -39,10 +39,16 @@ DiscoveryResult discoverPrinter(PrinterTransport& transport,
   DiscoveryResult out;
   std::vector<Endpoint> candidates;
 
-  // ---- Phase 1: prefer the advertised AE30 service ------------------------
+  // ---- Phase 1: prefer the advertised Tiny/iPrint service ----------------
+  // The family advertises two different service UUIDs: AE30 on GB01-class
+  // units, AF30 on the X18 (see DeviceProfile::advertised_service_uuid). Only
+  // filtering on AE30 meant the X18 could never be found here, so every job
+  // paid for a second, unfiltered scan and could lose it again to the result
+  // cap. Accepting both makes this phase the normal path for X18.
   ScanRequest filtered;
   filtered.duration_ms = filtered_duration_ms;
   filtered.service_uuid_filter = "AE30";
+  filtered.service_uuid_filter_alt = "AF30";
   ScanResult first;
   out.scan_rounds = 1;
   if (transport.scan(filtered, first) == Result::Ok) {
