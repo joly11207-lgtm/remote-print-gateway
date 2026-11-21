@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 
+#include <new>
 #include <string.h>
 
 #include <utility>
@@ -31,6 +32,12 @@
 namespace rtb {
 
 namespace {
+
+// Serial scan bounds (V1.2). The BLE scan itself is blocking, so it is short;
+// the endpoint ceiling keeps the JSON reply around 2 KB, which at 115200 baud
+// is roughly 0.2 s of writing and stays inside the browser's line buffer.
+constexpr size_t kSerialScanMaxEndpoints = 12;
+constexpr size_t kSerialScanReported = 10;
 
 // Hardware-validation telemetry only (RTB_DEBUG_HEAP=1). Never part of the
 // normal build: no allocation, no side effects besides the serial line.
@@ -130,7 +137,7 @@ void BridgeApp::begin() {
   // family GET /api/status reports, so the browser and the API cannot disagree.
   serial_control_.setIdentity(gatewayIdValue(), hardwareFamilyName(), RTB_VERSION);
   Serial.println("Remote Thermal Printer Bridge V0.1 - compile/mock verified only");
-  Serial.println("[ctrl] usb control ready, one command: {\"type\":\"gateway_info\"}");
+  Serial.println("[ctrl] usb control ready, commands: gateway_info, scan");
 }
 
 void BridgeApp::setMockMode(bool enabled) {
@@ -273,10 +280,11 @@ void BridgeApp::tick() {
   }
 }
 
-// V1.1 USB identity channel. Strictly bounded: a few bytes per tick, one fixed
-// line buffer, and only one command that can produce a reply. A client that
-// floods the port cannot starve the print queue or the HTTP server, and it can
-// never reach a printer, BLE scan or firmware path from here.
+// V1.1/V1.2 USB control channel. Strictly bounded: a few bytes per tick, one
+// fixed line buffer, and only two commands in total (identity + discovery). A
+// client that floods the port cannot starve the print queue or the HTTP server,
+// and it can never reach a printer, safe test, BLE connect or firmware path
+// from here.
 void BridgeApp::pollSerialControl() {
   size_t budget = 64;
   while (budget-- > 0) {
@@ -289,17 +297,20 @@ void BridgeApp::pollSerialControl() {
       if (serial_discard_) {
         serial_discard_ = false;
         serial_line_len_ = 0;
-        Serial.print("{\"type\":\"error\",\"error\":\"line_too_long\",\"protocol_version\":");
-        Serial.print(SerialControl::kProtocolVersion);
-        Serial.println("\"}");
+        printSerialLine(serial_control_.errorLine("line_too_long"));
       } else if (serial_line_len_ > 0) {
         serial_line_[serial_line_len_] = '\0';
-        const std::string reply = serial_control_.handleLine(serial_line_, serial_line_len_);
-        if (!reply.empty()) {
-          Serial.print(reply.c_str());
-          Serial.print('\n');
-        }
+        const SerialControl::Dispatch dispatch =
+            serial_control_.dispatch(serial_line_, serial_line_len_);
         serial_line_len_ = 0;
+
+        if (dispatch.command == SerialControl::Command::kScan) {
+          // Blocking for the whole scan: leave the byte loop first, so the RX
+          // buffer is not held while the radio runs.
+          runSerialScan(SerialControl::clampScanDuration(dispatch.duration_ms));
+          return;
+        }
+        if (!dispatch.reply.empty()) printSerialLine(dispatch.reply);
       }
       continue;
     }
@@ -313,6 +324,72 @@ void BridgeApp::pollSerialControl() {
     }
     serial_line_[serial_line_len_++] = c;
   }
+}
+
+void BridgeApp::printSerialLine(const std::string& line) {
+  Serial.print(line.c_str());
+  Serial.print('\n');
+}
+
+// The only radio operation reachable from the serial port. It scans, then maps
+// each endpoint through the same fingerprinter the HTTP API uses. It does NOT
+// connect to anything: no GATT probe, no safe test, no print.
+void BridgeApp::runSerialScan(uint32_t duration_ms) {
+  if (state_ == PrinterState::Printing || !active_) {
+    // Never interleave a scan with a job that owns the 2.4 GHz radio.
+    printSerialLine(serial_control_.errorLine("busy"));
+    return;
+  }
+
+  ScanRequest request;
+  request.duration_ms = duration_ms;
+  request.max_results = kSerialScanMaxEndpoints;
+
+  ScanResult found;
+  Result outcome = Result::IoError;
+  wifi_.setBleBusy(true);
+  const uint32_t started_ms = millis();
+  try {
+    outcome = active_->scan(request, found);
+  } catch (const std::bad_alloc&) {
+    // Same guard the HTTP scan path uses: a hostile advertiser count must not
+    // abort the firmware.
+    outcome = Result::IoError;
+    found.endpoints.clear();
+  }
+  const uint32_t elapsed_ms = millis() - started_ms;
+  wifi_.setBleBusy(false);
+
+  // Recognised devices go to the front until the buffer is half full, unknown
+  // advertisers fill it from the back. A truncation can therefore never hide
+  // the printer behind a wall of unrelated BLE gadgets.
+  SerialScanDevice devices[kSerialScanReported];
+  size_t front = 0;
+  size_t back = kSerialScanReported;
+  for (const Endpoint& endpoint : found.endpoints) {
+    const CatalogMatch match = DeviceCatalog::match(endpoint);
+    SerialScanDevice* slot = nullptr;
+    if (match.profile != nullptr) {
+      if (front < back) slot = &devices[front++];
+    } else if (back > front) {
+      slot = &devices[--back];
+    }
+    if (slot == nullptr) continue;
+    slot->name = endpoint.name.c_str();
+    slot->address = endpoint.address.c_str();
+    slot->rssi = endpoint.rssi;
+    slot->service_uuid = endpoint.service_uuid.c_str();
+    slot->fingerprint = protocolFamilyName(match.fingerprint.family);
+    slot->confidence = match.fingerprint.confidence;
+    slot->evidence = match.fingerprint.evidence;
+    slot->model_id = match.profile ? match.profile->model_id : "unmatched";
+    slot->match_reason = match.match_reason;
+  }
+  const size_t reported = front + (kSerialScanReported - back);
+
+  printSerialLine(serial_control_.scanLine(devices, reported, resultName(outcome),
+                                           static_cast<unsigned long>(elapsed_ms),
+                                           found.endpoints.size()));
 }
 
 CompatibilityInput BridgeApp::makeCompatibilityInput() const {

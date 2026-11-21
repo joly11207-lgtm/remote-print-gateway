@@ -1,0 +1,49 @@
+[
+  {
+    "board": "s3-n16r8",
+    "env": "s3_n16r8",
+    "hardware_target": "ESP32-S3",
+    "firmware_version": "0.1.0",
+    "firmware_version_reported": "0.1.0-skeleton",
+    "git_commit": "e0e8c9d8433f40ae5c9c1699987ede51cde7222d",
+    "git_dirty": true,
+    "build_time": "2026-11-21T09:12:05Z",
+    "factory": {
+      "path": "releases/0.1.0/gateway-s3-n16r8.factory.bin",
+      "size": 1466896,
+      "sha256": "0da08bafdb214515fe426c147e612816f55f5e8b4855ac0498605746a5d02c34",
+      "flash": {
+        "mode": "qio",
+        "freq": "80m",
+        "size": "16MB"
+      }
+    },
+    "parts": [
+      {
+        "name": "bootloader.bin",
+        "offset": "0x0",
+        "size": 15104,
+        "sha256": "2a71d69b471e20c2bac7fb469f3c6a807b3ebee780e348e5889db0da849ca363"
+      },
+      {
+        "name": "partitions.bin",
+        "offset": "0x8000",
+        "size": 3072,
+        "sha256": "bd0f7954aca2ef7d925ee21aaa1f3dc8822d1d6ce5cbbd26a135e5886bfff6ce"
+      },
+      {
+        "name": "boot_app0.bin",
+        "offset": "0xe000",
+        "size": 8192,
+        "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+      },
+      {
+        "name": "firmware.bin",
+        "offset": "0x10000",
+        "size": 1401360,
+        "sha256": "54ec1880e5ad63f6119a926cd02b1e21d5191ff8ecb8b473ed29b3301becf918"
+      }
+    ],
+    "note": "Merged factory image (bootloader + partitions + boot_app0 + app) at offset 0."
+  }
+]

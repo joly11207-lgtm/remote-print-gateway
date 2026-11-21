@@ -830,3 +830,112 @@ details.advanced td:first-child {
   box-shadow: inset 0 0 0 1px #c9daf9;
 }
 
+/* --- V1.2: DIY board matrix, installer and BLE scan results --------------- */
+.flow {
+  margin: 18px 0 0;
+  padding-left: 20px;
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+
+.flow li { margin: 4px 0; }
+
+.board-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.board {
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.board.is-verified { border-color: #cfe6da; background: #f7fdfa; }
+
+.board-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.board-head h3 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -.01em;
+}
+
+.board .muted { margin-top: 6px; }
+
+.board .actions { margin-top: 12px; }
+
+.board .note { margin-top: 12px; }
+
+.chip.is-off { color: var(--ink-faint); background: #f4f6fa; }
+
+.installer { display: inline-block; }
+.installer .note { margin-top: 8px; }
+.installer .note[hidden] { display: none !important; }
+
+.note.ok {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.note.mono,
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+/* Scan results: one card per advertiser, recognised devices first. */
+.scan-area {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.scan-list {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.scan-item {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.scan-item.is-match { border-color: #cfe6da; background: #f7fdfa; }
+
+.scan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scan-head strong { font-size: 15.5px; overflow-wrap: anywhere; }
+
+.facts.compact {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px 14px;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.facts.compact dd { font-size: 13.5px; }
+
+.scan-item .note { margin-top: 8px; }
+

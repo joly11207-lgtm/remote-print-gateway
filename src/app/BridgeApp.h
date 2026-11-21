@@ -97,9 +97,13 @@ class BridgeApp {
   void setMockMode(bool enabled);
   CompatibilityInput makeCompatibilityInput() const;
 
-  // V1.1 read-only USB identity channel. Bounded, non-blocking, and it only
-  // ever answers gateway_info (see app/SerialControl.h).
+  // V1.1/V1.2 USB control channel. Bounded and non-blocking; the only commands
+  // it answers are gateway_info and scan (see app/SerialControl.h).
   void pollSerialControl();
+  void printSerialLine(const std::string& line);
+  // Runs one bounded BLE scan for the serial `scan` command and answers it.
+  // It never connects, never tests and never prints.
+  void runSerialScan(uint32_t duration_ms);
 
   WebServer server_;
   WifiService wifi_;

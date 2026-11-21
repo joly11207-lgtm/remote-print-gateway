@@ -1786,11 +1786,12 @@ static void testRawPrintAssembler() {
   }
 }
 
-// Website V1.1: the USB serial channel is an identity handshake, not a console.
+// Website V1.1/V1.2: the USB serial channel answers exactly two commands.
 // Every refusal below must also be free of side effects - the parser owns no
-// printer, transport or firmware state at all.
+// printer, transport or firmware state, and the scan reply is rendered only
+// from data the caller measured.
 void testSerialControl() {
-  section("Serial control: read-only gateway_info handshake (V1.1)");
+  section("Serial control: gateway_info + scan only (V1.1/V1.2)");
 
   SerialControl control;
   control.setIdentity("gw-esp32-a1b2c3", "ESP32-WROOM-32E", "0.2.0");
@@ -1800,28 +1801,56 @@ void testSerialControl() {
       "\"hardware_family\":\"ESP32-WROOM-32E\",\"firmware_version\":\"0.2.0\","
       "\"protocol_version\":1}";
 
-  // ---- the one accepted command, exact wire shape ----
-  CHECK(control.handleLine("{\"type\":\"gateway_info\"}") == expected);
-  CHECK(control.handleLine(std::string("{\"type\":\"gateway_info\"}\r\n")) == expected);
-  CHECK(control.handleLine(std::string("  {\"type\":\"gateway_info\"}  ")) == expected);
+  // ---- accepted command #1: identity, exact wire shape ----
+  CHECK(control.dispatch("{\"type\":\"gateway_info\"}").command ==
+        SerialControl::Command::kInfo);
+  CHECK(control.dispatch("{\"type\":\"gateway_info\"}").reply == expected);
+  CHECK(control.dispatch(std::string("{\"type\":\"gateway_info\"}\r\n")).reply == expected);
+  CHECK(control.dispatch(std::string("  {\"type\":\"gateway_info\"}  ")).reply == expected);
   // Extra fields are ignored: the client may add whatever it likes.
-  CHECK(control.handleLine("{\"type\":\"gateway_info\",\"nonce\":\"7\"}") == expected);
+  CHECK(control.dispatch("{\"type\":\"gateway_info\",\"nonce\":\"7\"}").reply == expected);
   // A fixed schema: one line, no newline inside, version always present.
   CHECK(expected.find('\n') == std::string::npos);
   CHECK(expected.find("\"protocol_version\":1") != std::string::npos);
 
+  // ---- accepted command #2: scan is handed to the caller, never answered here ----
+  {
+    const SerialControl::Dispatch scan = control.dispatch("{\"type\":\"scan\"}");
+    CHECK(scan.command == SerialControl::Command::kScan);
+    CHECK(scan.reply.empty());
+    CHECK(control.dispatch(std::string("{\"type\":\"scan\"}\r\n")).command ==
+          SerialControl::Command::kScan);
+  }
+
+  // ---- scan may ask for a window, but the caller only grants a bounded one ----
+  {
+    CHECK(control.dispatch("{\"type\":\"scan\",\"duration_ms\":1500}").duration_ms == 1500);
+    CHECK(control.dispatch("{\"type\":\"scan\"}").duration_ms == 0);
+    CHECK(SerialControl::clampScanDuration(0) == SerialControl::kScanDefaultMs);
+    CHECK(SerialControl::clampScanDuration(-5) == SerialControl::kScanDefaultMs);
+    CHECK(SerialControl::clampScanDuration(200) == SerialControl::kScanMinMs);
+    CHECK(SerialControl::clampScanDuration(1500) == 1500);
+    CHECK(SerialControl::clampScanDuration(60000) == SerialControl::kScanMaxMs);
+    CHECK(SerialControl::clampScanDuration(-2147483647 - 1) == SerialControl::kScanDefaultMs);
+  }
+
   // ---- human logs on the same UART are not commands ----
-  CHECK(control.handleLine("Remote Thermal Printer Bridge V0.1 - compile/mock verified only")
-            .empty());
-  CHECK(control.handleLine("[ctrl] usb control ready, one command").empty());
-  CHECK(control.handleLine("[HEAP] rawprint free=45000").empty());
-  CHECK(control.handleLine("").empty());
-  CHECK(control.handleLine("   ").empty());
-  CHECK(control.handleLine("gateway_info").empty());
+  const char* quiet_lines[] = {
+      "Remote Thermal Printer Bridge V0.1 - compile/mock verified only",
+      "[ctrl] usb control ready",
+      "[HEAP] rawprint free=45000",
+      "",
+      "   ",
+      "gateway_info",
+  };
+  for (const char* log_line : quiet_lines) {
+    const SerialControl::Dispatch quiet = control.dispatch(log_line);
+    CHECK(quiet.command == SerialControl::Command::kNone);
+    CHECK(quiet.reply.empty());
+  }
 
   // ---- refused commands: no identity, no echo ----
   const char* refused[] = {
-      "{\"type\":\"scan\"}",
       "{\"type\":\"print\"}",
       "{\"type\":\"raw\"}",
       "{\"type\":\"firmware_update\"}",
@@ -1830,22 +1859,30 @@ void testSerialControl() {
       "{\"type\":\"unknown\"}",
       "{\"type\":\"Gateway_Info\"}",  // case matters
       "{\"type\":\"gateway_info_x\"}",
+      "{\"type\":\"scan_all\"}",
   };
   for (const char* command : refused) {
-    const std::string reply = control.handleLine(command);
-    CHECK(reply.find("\"error\":\"unsupported_command\"") != std::string::npos);
-    CHECK(reply.find("\"type\":\"error\"") != std::string::npos);
-    CHECK(reply.find("gateway_id") == std::string::npos);
-    CHECK(reply.find("protocol_version") != std::string::npos);
+    const SerialControl::Dispatch dispatch = control.dispatch(command);
+    CHECK(dispatch.command == SerialControl::Command::kError);
+    CHECK(dispatch.reply.find("\"error\":\"unsupported_command\"") != std::string::npos);
+    CHECK(dispatch.reply.find("\"type\":\"error\"") != std::string::npos);
+    CHECK(dispatch.reply.find("gateway_id") == std::string::npos);
+    CHECK(dispatch.reply.find("protocol_version") != std::string::npos);
   }
 
   // ---- malformed input is rejected, not guessed ----
-  CHECK(control.handleLine("{\"type\":").find("malformed_request") != std::string::npos);
-  CHECK(control.handleLine("{}").find("malformed_request") != std::string::npos);
-  CHECK(control.handleLine("{\"command\":\"gateway_info\"}").find("malformed_request") !=
-        std::string::npos);
-  CHECK(control.handleLine("{\"type\":123}").find("malformed_request") != std::string::npos);
-  CHECK(control.handleLine("{\"type\":null}").find("malformed_request") != std::string::npos);
+  const char* malformed[] = {
+      "{\"type\":",
+      "{}",
+      "{\"command\":\"gateway_info\"}",
+      "{\"type\":123}",
+      "{\"type\":null}",
+  };
+  for (const char* bad : malformed) {
+    const SerialControl::Dispatch dispatch = control.dispatch(bad);
+    CHECK(dispatch.command == SerialControl::Command::kError);
+    CHECK(dispatch.reply.find("malformed_request") != std::string::npos);
+  }
 
   // ---- oversized line: refused without growing anything ----
   {
@@ -1853,22 +1890,24 @@ void testSerialControl() {
     big += std::string(300, 'a');
     big += "\"}";
     CHECK(big.size() > SerialControl::kMaxLineBytes);
-    CHECK(control.handleLine(big).find("line_too_long") != std::string::npos);
+    const SerialControl::Dispatch dispatch = control.dispatch(big);
+    CHECK(dispatch.command == SerialControl::Command::kError);
+    CHECK(dispatch.reply.find("line_too_long") != std::string::npos);
   }
 
   // ---- an injection attempt never reaches the reply ----
   {
-    const std::string reply = control.handleLine("{\"type\":\"gateway_info\",\"x\":\"evil\"}");
+    const std::string reply = control.dispatch("{\"type\":\"gateway_info\",\"x\":\"evil\"}").reply;
     CHECK(reply == expected);
     CHECK(reply.find("evil") == std::string::npos);
     const std::string trick =
-        control.handleLine("{\"type\":\"gateway_info\\\",\\\"x\\\":\\\"evil\"}");
+        control.dispatch("{\"type\":\"gateway_info\\\",\\\"x\\\":\\\"evil\"}").reply;
     CHECK(trick.find("evil") == std::string::npos);
   }
 
   // ---- identity is reported verbatim, and can be updated ----
   control.setIdentity("gw-esp32-ffffff", "ESP32-S3-WROOM-1", "0.3.1");
-  const std::string second = control.handleLine("{\"type\":\"gateway_info\"}");
+  const std::string second = control.dispatch("{\"type\":\"gateway_info\"}").reply;
   CHECK(second.find("\"gateway_id\":\"gw-esp32-ffffff\"") != std::string::npos);
   CHECK(second.find("\"hardware_family\":\"ESP32-S3-WROOM-1\"") != std::string::npos);
   CHECK(second.find("\"firmware_version\":\"0.3.1\"") != std::string::npos);
@@ -1876,9 +1915,100 @@ void testSerialControl() {
   // ---- an empty identity is still a valid, parseable line ----
   {
     SerialControl blank;
-    const std::string reply = blank.handleLine("{\"type\":\"gateway_info\"}");
+    const std::string reply = blank.dispatch("{\"type\":\"gateway_info\"}").reply;
     CHECK(reply.find("\"gateway_id\":\"\"") != std::string::npos);
     CHECK(reply.find("\"protocol_version\":1") != std::string::npos);
+  }
+
+  // ---- scan_result: fixed schema, and only fields the scan really measured ----
+  {
+    SerialScanDevice device;
+    device.name = "X18";
+    device.address = "aa:bb:cc:dd:ee:ff";
+    device.rssi = -52;
+    device.service_uuid = "0000af30-0000-1000-8000-00805f9b34fb";
+    device.fingerprint = "TinyIPrint";
+    device.confidence = 70;
+    device.evidence = "bluetooth_name_pattern";
+    device.model_id = "x18_aijixing";
+    device.match_reason = "bluetooth_name_pattern";
+
+    const std::string line = control.scanLine(&device, 1, "OK", 4012, 3);
+    CHECK(line.find("{\"type\":\"scan_result\",\"result\":\"OK\",\"transport\":\"ble\"") == 0);
+    CHECK(line.find("\"scanned\":3") != std::string::npos);
+    CHECK(line.find("\"elapsed_ms\":4012") != std::string::npos);
+    CHECK(line.find("\"protocol_version\":1") != std::string::npos);
+    CHECK(line.find("\"name\":\"X18\"") != std::string::npos);
+    CHECK(line.find("\"address\":\"aa:bb:cc:dd:ee:ff\"") != std::string::npos);
+    CHECK(line.find("\"rssi\":-52") != std::string::npos);
+    CHECK(line.find("\"services\":[\"0000af30") != std::string::npos);
+    CHECK(line.find("\"fingerprint\":\"TinyIPrint\"") != std::string::npos);
+    CHECK(line.find("\"confidence\":70") != std::string::npos);
+    CHECK(line.find("\"evidence\":\"bluetooth_name_pattern\"") != std::string::npos);
+    CHECK(line.find("\"model_id\":\"x18_aijixing\"") != std::string::npos);
+    CHECK(line.find("\"match_reason\":\"bluetooth_name_pattern\"") != std::string::npos);
+    // One line only, and nothing invented: no GATT enumeration, no manufacturer
+    // data (V1.2 never connects to a printer).
+    CHECK(line.find('\n') == std::string::npos);
+    CHECK(line.find("characteristics") == std::string::npos);
+    CHECK(line.find("manufacturer") == std::string::npos);
+    CHECK(line.find("gatt_verified") == std::string::npos);
+  }
+
+  // ---- scan_result: no devices, and an advertiser with no name / no service ----
+  {
+    const std::string empty = control.scanLine(nullptr, 0, "NOT_FOUND", 4001, 0);
+    CHECK(empty.find("\"result\":\"NOT_FOUND\"") != std::string::npos);
+    CHECK(empty.find("\"devices\":[]") != std::string::npos);
+
+    SerialScanDevice quiet;
+    quiet.name = "";
+    quiet.address = "11:22:33:44:55:66";
+    quiet.rssi = -90;
+    quiet.service_uuid = "";
+    quiet.fingerprint = "Unknown";
+    quiet.confidence = 0;
+    quiet.evidence = "no_matching_evidence";
+    quiet.model_id = "unmatched";
+    quiet.match_reason = "insufficient_evidence";
+    const std::string line = control.scanLine(&quiet, 1, "OK", 4002, 1);
+    CHECK(line.find("\"name\":\"\"") != std::string::npos);
+    CHECK(line.find("\"services\":[]") != std::string::npos);
+    CHECK(line.find("\"model_id\":\"unmatched\"") != std::string::npos);
+  }
+
+  // ---- scan_result: two devices stay comma separated on one line ----
+  {
+    SerialScanDevice pair[2];
+    pair[0].name = "GB01";
+    pair[0].address = "aa:aa:aa:aa:aa:aa";
+    pair[0].rssi = -60;
+    pair[0].service_uuid = "ae30";
+    pair[0].model_id = "gb01";
+    pair[1].name = "X18";
+    pair[1].address = "bb:bb:bb:bb:bb:bb";
+    pair[1].rssi = -45;
+    pair[1].service_uuid = "af30";
+    pair[1].model_id = "x18_aijixing";
+    const std::string line = control.scanLine(pair, 2, "OK", 4003, 2);
+    CHECK(line.find("\"name\":\"GB01\"") < line.find("\"name\":\"X18\""));
+    CHECK(line.find("},{") != std::string::npos);
+    CHECK(line.find('\n') == std::string::npos);
+    CHECK(line.substr(line.size() - 2) == "]}");
+  }
+
+  // ---- scan_result: a hostile name cannot break the JSON ----
+  {
+    SerialScanDevice hostile;
+    hostile.name = "X18\",\"model_id\":\"evil";
+    hostile.address = "cc:cc:cc:cc:cc:cc";
+    hostile.rssi = -70;
+    hostile.service_uuid = "";
+    hostile.model_id = "unmatched";
+    const std::string line = control.scanLine(&hostile, 1, "OK", 4004, 1);
+    CHECK(line.find("\\\"model_id\\\"") != std::string::npos);
+    CHECK(line.find("\"model_id\":\"evil") == std::string::npos);
+    CHECK(line.find("\"model_id\":\"unmatched\"") != std::string::npos);
   }
 }
 

@@ -1,0 +1,16 @@
+{
+  "name": "Remote Print Gateway \u2014 ESP32-S3 N16R8",
+  "version": "0.1.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "releases/0.1.0/gateway-s3-n16r8.factory.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

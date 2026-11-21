@@ -11,6 +11,7 @@ Usage: python tests/test_gateway_web.py
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -327,15 +328,17 @@ def check_web_serial(messages: dict) -> None:
     setup = (WEB_DIR / "setup/index.html").read_text(encoding="utf-8")
     lab = (WEB_DIR / "lab/index.html").read_text(encoding="utf-8")
 
-    # --- the transport can send exactly one thing -------------------------
-    assert (
-        serial.count('const INFO_REQUEST = \'{"type":"gateway_info"}\';') == 1
-    ), "exactly one request literal"
-    writes = re.findall(r"await this\._writeLine\(([^)]*)\)", serial)
-    assert writes == ["INFO_REQUEST"], f"only gateway_info may be written: {writes}"
     # The doc comment names the APIs it bans, so scan code only, not prose.
     code = re.sub(r"/\*.*?\*/", "", serial, flags=re.S)
     code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+
+    # --- the transport can send exactly two things, both fixed -------------
+    assert serial.count("const INFO_REQUEST = '{\"type\":\"gateway_info\"}';") == 1
+    assert serial.count("const SCAN_COMMAND = 'scan';") == 1
+    writes = re.findall(r"await this\._writeLine\(([^)]*)\)", code)
+    assert len(writes) == 2, f"exactly two commands may be written: {writes}"
+    assert sum(write == "INFO_REQUEST" for write in writes) == 1, writes
+    assert sum("SCAN_COMMAND" in write and "duration_ms" in write for write in writes) == 1, writes
     for forbidden in ("sendRaw", "sendHex", "sendCommand", "eval(", "new Function("):
         assert forbidden not in code, f"no generic hardware console: {forbidden}"
     assert "requestPort" in serial and "getPorts" in serial
@@ -589,6 +592,102 @@ def check_dev_gating(case_id: str) -> None:
     print("  CMD 0x01 never executed")
 
 
+def check_firmware_release(server: Server) -> None:
+    section("V1.2: firmware packaging, manifest, in-browser installer, download")
+
+    boards_js = (WEB_DIR / "boards.js").read_text(encoding="utf-8")
+    matrix = json.loads(
+        re.search(r"window\.RTB_BOARDS = (\[.*?\]);", boards_js, re.S).group(1)
+    )
+    meta = json.loads(
+        re.search(r"window\.RTB_FIRMWARE = (\{.*?\});", boards_js, re.S).group(1)
+    )
+    assert meta["installer"].startswith("esp-web-tools"), meta["installer"]
+
+    published = [board for board in matrix if board.get("installer")]
+    assert published, "no board publishes an installer"
+    for board in matrix:
+        if board["status"] == "verified":
+            assert board["installer"], f"{board['id']} is verified but ships no installer"
+            assert board["download"], f"{board['id']} is verified but ships no .bin"
+        else:
+            assert not board["installer"], (
+                f"{board['id']} is {board['status']} yet publishes an installer"
+            )
+
+    for board in published:
+        manifest_path = WEB_DIR / board["installer"]
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["version"] == board["version"], (manifest["version"], board["version"])
+        assert manifest["new_install_prompt_erase"] is True, "a blank board must be erased"
+        assert "https://" not in manifest_path.read_text(encoding="utf-8"), "manifest must stay same-origin"
+        builds = manifest["builds"]
+        assert len(builds) == 1, builds
+        assert builds[0]["chipFamily"] == board["chip_family"], builds[0]["chipFamily"]
+        parts = builds[0]["parts"]
+        assert len(parts) == 1 and parts[0]["offset"] == 0, (
+            "a blank board needs the merged factory image at offset 0"
+        )
+
+        # The published bytes are the factory image itself, not an OTA app.
+        binary = (manifest_path.parent / parts[0]["path"]).resolve()
+        assert binary.is_file(), binary
+        payload = binary.read_bytes()
+        assert len(payload) == board["size"], (len(payload), board["size"])
+        assert hashlib.sha256(payload).hexdigest() == board["sha256"], board["id"]
+        assert payload[0] == 0xE9, "an ESP image starts with the 0xE9 magic"
+
+        # A published image that cannot answer gateway_info/scan cannot close
+        # the V1.2 loop, no matter what the site promises.
+        assert b"gateway_info" in payload, "image cannot answer gateway_info"
+        assert b"scan_result" in payload, "image cannot answer a BLE scan"
+
+        status, content_type, body = server.get("/" + board["installer"])
+        assert status == 200, (board["installer"], status)
+        assert content_type.startswith("application/json"), content_type
+        served = json.loads(body)
+        assert served["builds"][0]["parts"][0]["offset"] == 0, served
+
+        status, content_type, body = server.get("/" + board["download"])
+        assert status == 200, (board["download"], status)
+        assert content_type.startswith("application/octet-stream"), content_type
+        assert hashlib.sha256(body).hexdigest() == board["sha256"], "download bytes differ"
+
+        provenance = json.loads(
+            (WEB_DIR / board["download"]).parent.joinpath("provenance.json").read_text("utf-8")
+        )
+        entry = [item for item in provenance if "firmware/" + item["factory"]["path"] == board["download"]]
+        assert len(entry) == 1, f"provenance has no entry for {board['download']}"
+        entry = entry[0]
+        assert entry["factory"]["sha256"] == board["sha256"], entry["factory"]["sha256"]
+        assert entry["firmware_version"] == board["version"], entry["firmware_version"]
+        assert entry["firmware_version_reported"] == meta["firmware_version_reported"]
+        assert [part["offset"] for part in entry["parts"]] == ["0x0", "0x8000", "0xe000", "0x10000"], (
+            "factory image = bootloader + partition table + boot_app0 + app"
+        )
+        print(
+            f"  {board['id']}: {board['size']} bytes, sha256 {board['sha256'][:16]}…, "
+            f"manifest + download + provenance agree"
+        )
+
+    # The page binds the installer and the download; nothing else may build them.
+    setup = (WEB_DIR / "setup" / "index.html").read_text(encoding="utf-8")
+    assert 'src="/boards.js"' in setup, "the page never loads the generated board matrix"
+    assert 'type="module" src="/vendor/esp-web-tools/install-button.js"' in setup, (
+        "the installer element must be the vendored one, loaded as a module"
+    )
+    source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "createElement('esp-web-install-button')" in source
+    assert "element.setAttribute('manifest'" in source
+    assert "download: ''" in source, "no .bin download link is rendered"
+    assert "onInstallerDialogClosed" in source, "nothing guides the reconnect after flashing"
+    assert "if (!board.installer)" in source, "unsupported boards must not get an action"
+    print(
+        f"  {len(published)} installable board(s) of {len(matrix)}, "
+        f"installer + download + reconnect guidance wired"
+    )
+
+
 def main() -> int:
     db.initialize()
     messages = load_messages()
@@ -602,6 +701,7 @@ def main() -> int:
         check_i18n(messages)
         check_ui_copy(messages)
         check_web_serial(messages)
+        check_firmware_release(server)
         check_deploy_copy(messages)
         check_vercel_config()
         check_ui_flow_x18(server)

@@ -32,12 +32,12 @@
 <main class="wrap wide">
   <div class="page-head">
     <h1 data-i18n="setup.title">Set up your Gateway</h1>
-    <p data-i18n="setup.lede">Five steps from a bare board to a Gateway this site can talk to. This page is a preview: nothing is flashed, and no Wi-Fi credentials are sent.</p>
+    <p data-i18n="setup.lede">Five steps from a bare board to a Gateway this site can talk to. Steps 1 and 3 are real: the browser opens the USB port, reads the Gateway and can install its firmware.</p>
   </div>
 
   <p class="note">
     <strong data-i18n="common.demoTag">Demo / Simulator.</strong>
-    <span data-i18n="setup.demoBody">Step 1 is real: the browser opens the USB serial port you pick and asks the Gateway who it is. That handshake is read-only, and Wi-Fi setup or firmware updates are still not wired up.</span>
+    <span data-i18n="setup.demoBody">Steps 1 and 3 are real: the browser opens the USB serial port you pick, reads the Gateway identity and can write the firmware. Wi-Fi setup is still not wired up.</span>
   </p>
 
   <section class="card gateway-card" id="gateway-card" aria-live="polite">
@@ -75,6 +75,14 @@
       <p class="note" data-usb="hint" data-i18n="usb.previouslyAuthorized" hidden></p>
       <dl class="facts" data-usb="facts" hidden></dl>
       <p class="note error" data-usb="error" hidden></p>
+
+      <div class="scan-area" data-usb-scan hidden>
+        <div class="actions">
+          <button class="btn primary" type="button" data-usb-action="scan" data-i18n="scan.cta">Scan for printers</button>
+        </div>
+        <p class="note" data-usb="scan-note" hidden></p>
+        <ul class="scan-list" data-usb="scan-list" hidden></ul>
+      </div>
     </section>
 
     <section class="card">
@@ -85,10 +93,29 @@
       </div>
     </section>
 
-    <section class="card">
-      <h2 data-i18n="setup.step3.title">3. Firmware</h2>
-      <p data-i18n="setup.step3.body">The Gateway reports its firmware version and the profiles it can run. Updates are installed from the device side today; a browser-based update is planned.</p>
-      <p class="note" data-i18n="setup.step3.status">Status: Coming soon — OTA from the browser is not available.</p>
+    <section class="card" id="firmware-card">
+      <div class="card-head">
+        <div>
+          <h2 data-i18n="setup.step3.title">3. Firmware</h2>
+          <p data-i18n="firmware.lede">A blank board needs the Gateway firmware once. Pick the board you have and the browser writes it over USB — no toolchain, no command line.</p>
+        </div>
+        <span class="badge is-demo" data-i18n="firmware.tag">Build your own Gateway</span>
+      </div>
+
+      <p class="note ok" data-i18n="setup.step3.status">Status: real — the installer runs entirely in this browser.</p>
+
+      <ol class="flow">
+        <li data-i18n="firmware.flow1">Choose a supported board</li>
+        <li data-i18n="firmware.flow2">Install Gateway firmware</li>
+        <li data-i18n="firmware.flow3">Reconnect the Gateway</li>
+        <li data-i18n="firmware.flow4">Add your printer</li>
+      </ol>
+
+      <div class="board-list" data-board-list></div>
+
+      <p class="note" data-i18n="firmware.matchWarning">Make sure your board matches the selected model: the same chip family can differ in flash size, PSRAM and flash mode. The installer refuses a board whose chip family does not match the manifest.</p>
+      <p class="note ok" data-firmware="installed" data-i18n="firmware.installed" hidden>Installer closed. If the flash finished, the Gateway has restarted — reconnect it in step 1 to read its identity.</p>
+      <p class="note" data-i18n="firmware.manualNote">Manual flashing is for advanced users.</p>
     </section>
 
     <section class="card">
@@ -109,12 +136,16 @@
 
 <footer class="site-footer">
   <div class="wrap wide">
-    <p data-i18n="setup.footer">V1 preview — setup steps are documentation only in this build.</p>
+    <p data-i18n="setup.footer">V1.2 preview — firmware install, the USB handshake and BLE discovery are real; printing is not wired up.</p>
   </div>
 </footer>
 
 <script src="/i18n.js"></script>
 <script src="/serial.js"></script>
+<script src="/boards.js"></script>
+<!-- esp-web-tools 10.5.2, vendored: the installer never loads a third-party
+     script at runtime and the manifest it reads is served from this site. -->
+<script type="module" src="/vendor/esp-web-tools/install-button.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

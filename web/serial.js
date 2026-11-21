@@ -33,12 +33,20 @@
   const BAUD_RATE = 115200;
   const DEFAULT_TIMEOUT_MS = 2500;
   const DEFAULT_ATTEMPTS = 3;
-  // Bounded buffers: a chatty or broken device must not grow our memory.
-  const MAX_LINE_CHARS = 1024;
+  // Bounded buffers: a chatty or broken device must not grow our memory. A
+  // scan_result for ten devices is ~3 KB, so the line ceiling is larger than
+  // the identity reply needs.
+  const MAX_LINE_CHARS = 16384;
   const MAX_QUEUED_LINES = 32;
   const REQUIRED_FIELDS = ['gateway_id', 'hardware_family', 'firmware_version'];
-  // The only command this module can ever send.
+  // The firmware grants 1000..8000 ms; anything else is a request it clamps.
+  const SCAN_DEFAULT_MS = 4000;
+  const SCAN_MIN_MS = 1000;
+  const SCAN_MAX_MS = 8000;
+  const SCAN_TIMEOUT_MS = 20000;
+  // The only two commands this module can ever send.
   const INFO_REQUEST = '{"type":"gateway_info"}';
+  const SCAN_COMMAND = 'scan';
 
   const STATE = {
     UNSUPPORTED: 'unsupported',
@@ -59,6 +67,14 @@
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function clampScanDuration(value) {
+    const ms =
+      typeof value === 'number' && isFinite(value) && value > 0 ? Math.floor(value) : SCAN_DEFAULT_MS;
+    if (ms < SCAN_MIN_MS) return SCAN_MIN_MS;
+    if (ms > SCAN_MAX_MS) return SCAN_MAX_MS;
+    return ms;
   }
 
   function detectSerial() {
@@ -85,6 +101,49 @@
     };
   }
 
+  function validateDevice(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    return {
+      name: typeof raw.name === 'string' ? raw.name : '',
+      address: typeof raw.address === 'string' ? raw.address : '',
+      rssi: typeof raw.rssi === 'number' && isFinite(raw.rssi) ? raw.rssi : null,
+      // The advertisement carries at most one service in this firmware, so the
+      // array is normally 0 or 1 long. Never padded.
+      services: Array.isArray(raw.services)
+        ? raw.services.filter((item) => typeof item === 'string' && item)
+        : [],
+      service_uuid: typeof raw.service_uuid === 'string' ? raw.service_uuid : '',
+      fingerprint: typeof raw.fingerprint === 'string' ? raw.fingerprint : 'unknown',
+      confidence: typeof raw.confidence === 'number' && isFinite(raw.confidence) ? raw.confidence : 0,
+      evidence: typeof raw.evidence === 'string' ? raw.evidence : 'none',
+      model_id: typeof raw.model_id === 'string' ? raw.model_id : 'unmatched',
+      match_reason: typeof raw.match_reason === 'string' ? raw.match_reason : 'none',
+    };
+  }
+
+  function validateScan(payload) {
+    if (!Array.isArray(payload.devices)) {
+      throw new GatewaySerialError('invalid_response', 'scan reply has no devices');
+    }
+    const devices = payload.devices.map(validateDevice).filter(Boolean);
+    return {
+      result: typeof payload.result === 'string' ? payload.result : 'UNKNOWN',
+      transport: typeof payload.transport === 'string' ? payload.transport : 'unknown',
+      scanned: typeof payload.scanned === 'number' && isFinite(payload.scanned)
+        ? payload.scanned
+        : devices.length,
+      elapsed_ms:
+        typeof payload.elapsed_ms === 'number' && isFinite(payload.elapsed_ms)
+          ? payload.elapsed_ms
+          : 0,
+      protocol_version:
+        typeof payload.protocol_version === 'number' && isFinite(payload.protocol_version)
+          ? payload.protocol_version
+          : PROTOCOL_VERSION,
+      devices,
+    };
+  }
+
   class WebSerialGatewayClient {
     constructor(options) {
       const config = options || {};
@@ -107,6 +166,8 @@
       this.closing = false;
       this.dead = null;        // set when the read stream dies (device removed)
       this.connecting = null;  // in-flight connect(): double clicks reuse it
+      this.scanning = null;    // in-flight scan(): double clicks reuse it
+      this.scanTimeoutMs = config.scanTimeoutMs || SCAN_TIMEOUT_MS;
       this.listeners = [];
       this.decoder = typeof TextDecoder === 'function' ? new TextDecoder() : null;
     }
@@ -258,6 +319,74 @@
       this.info = null;
       this.error = null;
       this._setState(this.serial ? STATE.DISCONNECTED : STATE.UNSUPPORTED);
+    }
+
+    // V1.2: the second and last command. Same one-in-flight rule as connect():
+    // two clicks must not interleave two scans on one port.
+    scan(options) {
+      if (this.scanning) return this.scanning;
+      this.scanning = this._scan(options).then(
+        (result) => {
+          this.scanning = null;
+          return result;
+        },
+        (error) => {
+          this.scanning = null;
+          throw error;
+        }
+      );
+      return this.scanning;
+    }
+
+    async _scan(options) {
+      if (this.state !== STATE.CONNECTED || !this.port) {
+        // Never silently reopen: a scan is not a reason to grab a port.
+        throw new GatewaySerialError('not_connected', 'connect the gateway first');
+      }
+      const durationMs = clampScanDuration((options || {}).durationMs);
+      try {
+        await this._writeLine(`{"type":"${SCAN_COMMAND}","duration_ms":${durationMs}}`);
+      } catch (error) {
+        await this._teardown();
+        this._fail(new GatewaySerialError('device_lost', 'write failed'));
+      }
+      try {
+        return await this._awaitScan();
+      } catch (error) {
+        // A failed scan does not mean a dead link: only a dead stream does.
+        if (error.code === 'device_lost') {
+          await this._teardown();
+          this._setState(STATE.ERROR);
+        }
+        throw error;
+      }
+    }
+
+    async _awaitScan() {
+      const deadline = Date.now() + this.scanTimeoutMs;
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          throw new GatewaySerialError('scan_timeout', 'the scan did not finish');
+        }
+        const line = await this._waitLine(remaining);
+        const text = String(line).trim();
+        if (!text || text.charAt(0) !== '{') continue;  // human log line
+
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch (error) {
+          throw new GatewaySerialError('invalid_response', 'scan reply is not JSON');
+        }
+        if (payload && payload.type === 'error') {
+          throw new GatewaySerialError('gateway_refused', String(payload.error || 'refused'));
+        }
+        if (!payload || payload.type !== 'scan_result') {
+          throw new GatewaySerialError('wrong_type', 'expected scan_result');
+        }
+        return validateScan(payload);
+      }
     }
 
     // A dev board resets when DTR/RTS toggle on open: on a DevKitC those lines
@@ -483,6 +612,11 @@
       STATE,
       PROTOCOL_VERSION,
       INFO_REQUEST,
+      SCAN_COMMAND,
+      SCAN_DEFAULT_MS,
+      SCAN_MIN_MS,
+      SCAN_MAX_MS,
+      SCAN_TIMEOUT_MS,
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

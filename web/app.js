@@ -339,6 +339,9 @@ function usbClient() {
       client: Serial ? new Serial() : null,
       regions: Array.from(document.querySelectorAll('[data-usb-region]')),
       authorized: false,
+      scanning: false,
+      scan: null,      // last scan_result, already validated by serial.js
+      scanError: null, // stable code, localised at render time
     };
   }
   return state.usb;
@@ -430,7 +433,106 @@ function renderUsb() {
       disconnect.hidden = !connected;
       disconnect.disabled = busy;
     }
+
+    // Scanning is only possible on a live link: the port must already be open.
+    const scanArea = region.querySelector('[data-usb-scan]');
+    if (scanArea) scanArea.hidden = !connected;
+    const scanButton = region.querySelector('[data-usb-action="scan"]');
+    if (scanButton) {
+      scanButton.disabled = !connected || busy || Boolean(usb.scanning);
+      scanButton.setAttribute('aria-busy', usb.scanning ? 'true' : 'false');
+    }
+    renderScanPanel(region);
   }
+}
+
+// --------------------------------------------------------------------------- //
+// BLE scan + fingerprint (V1.2): the gateway reports, we only display
+// --------------------------------------------------------------------------- //
+const SCAN_ERROR_KEYS = {
+  not_connected: 'scan.notConnected',
+  scan_timeout: 'scan.timeout',
+  timeout: 'scan.timeout',
+  invalid_response: 'scan.invalid',
+  wrong_type: 'scan.invalid',
+  gateway_refused: 'scan.refused',
+  device_lost: 'scan.deviceLost',
+  busy: 'scan.busy',
+};
+
+function recognised(device) {
+  return Boolean(device && device.model_id && device.model_id !== 'unmatched');
+}
+
+function transportLabel(value) {
+  const key = String(value || '').toLowerCase();
+  if (key === 'ble') return 'BLE';
+  if (key === 'bluetooth_classic') return 'Bluetooth Classic';
+  return key ? key.toUpperCase() : '—';
+}
+
+function renderScanPanel(region) {
+  const note = usbNode(region, 'scan-note');
+  const list = usbNode(region, 'scan-list');
+  if (!note || !list) return;
+
+  const usb = state.usb || {};
+  const scan = usb.scan;
+
+  if (usb.scanning) {
+    note.className = 'note';
+    note.textContent = I18N.t('scan.running');
+    note.hidden = false;
+  } else if (usb.scanError) {
+    note.className = 'note error';
+    note.textContent = I18N.t(SCAN_ERROR_KEYS[usb.scanError] || 'scan.error');
+    note.hidden = false;
+  } else if (scan) {
+    const found = scan.devices.filter(recognised);
+    note.className = found.length ? 'note ok' : 'note';
+    note.textContent = found.length
+      ? I18N.t('scan.found', { name: found[0].name || found[0].model_id, count: scan.scanned })
+      : I18N.t('scan.empty', { count: scan.scanned });
+    note.hidden = false;
+  } else {
+    note.className = 'note';
+    note.textContent = '';
+    note.hidden = true;
+  }
+
+  list.replaceChildren();
+  if (!scan || !scan.devices.length) {
+    list.hidden = true;
+    return;
+  }
+  for (const device of scan.devices) {
+    const item = h('li', { class: `scan-item${recognised(device) ? ' is-match' : ''}` });
+    const head = h('div', { class: 'scan-head' });
+    head.append(
+      h('strong', { text: device.name || device.address || I18N.t('scan.unnamed') }),
+      h('span', {
+        class: `badge ${recognised(device) ? 'is-online' : 'is-demo'}`,
+        text: I18N.t(recognised(device) ? 'scan.recognized' : 'scan.unknown'),
+      })
+    );
+    item.append(head);
+
+    // Same fields the firmware sent, nothing inferred on the page.
+    const facts = h('dl', { class: 'facts compact' });
+    facts.append(
+      fact(I18N.t('scan.transport'), transportLabel(scan.transport)),
+      fact(I18N.t('scan.profile'), recognised(device) ? device.model_id : '—'),
+      fact(I18N.t('scan.rssi'), device.rssi === null ? '—' : `${device.rssi} dBm`),
+      fact(I18N.t('scan.address'), device.address || '—')
+    );
+    item.append(facts);
+
+    const fingerprint = h('p', { class: 'note mono' });
+    fingerprint.textContent = `${device.fingerprint} · ${device.confidence} · ${device.evidence}`;
+    item.append(fingerprint);
+    list.append(item);
+  }
+  list.hidden = false;
 }
 
 function initUsb() {
@@ -442,6 +544,8 @@ function initUsb() {
     if (connect) connect.addEventListener('click', connectUsb);
     const disconnect = region.querySelector('[data-usb-action="disconnect"]');
     if (disconnect) disconnect.addEventListener('click', disconnectUsb);
+    const scan = region.querySelector('[data-usb-action="scan"]');
+    if (scan) scan.addEventListener('click', scanPrinters);
   }
 
   if (!usb.client) {
@@ -495,10 +599,189 @@ async function disconnectUsb(event) {
   try {
     await usb.client.disconnect();
   } finally {
+    // Scan results describe a link that no longer exists.
+    usb.scan = null;
+    usb.scanError = null;
     button.disabled = false;
     renderUsb();
     setBarStatus(state.gateway);
   }
+}
+
+// One bounded BLE scan over the open USB link. The firmware does the work; this
+// only asks, waits and displays what came back.
+async function scanPrinters(event) {
+  const button = event.currentTarget;
+  const usb = usbClient();
+  if (!usb.client) return;
+  usb.scanning = true;
+  usb.scanError = null;
+  renderUsb();
+  button.disabled = true;
+  try {
+    usb.scan = await usb.client.scan({ durationMs: 4000 });
+  } catch (error) {
+    usb.scanError = (error && error.code) || 'error';
+    usb.scan = null;
+  } finally {
+    usb.scanning = false;
+    button.disabled = false;
+    renderUsb();
+  }
+}
+
+// --------------------------------------------------------------------------- //
+// DIY gateway: board matrix + in-browser installer (V1.2)
+// --------------------------------------------------------------------------- //
+// The matrix comes from web/boards.js, which tools/build_web_firmware.py
+// generates from the actual built images. A board only gets an installer when
+// a factory image was packaged for it; everything else is listed as
+// experimental with no action, never as "supported".
+const BOARD_STATUS_KEYS = {
+  verified: 'firmware.status.verified',
+  experimental: 'firmware.status.experimental',
+};
+
+const BOARD_CAP_KEYS = {
+  wifi: 'firmware.cap.wifi',
+  ble: 'firmware.cap.ble',
+  web_serial: 'firmware.cap.webSerial',
+};
+
+function boardData() {
+  return Array.isArray(window.RTB_BOARDS) ? window.RTB_BOARDS : [];
+}
+
+function shortHash(value) {
+  if (typeof value !== 'string' || !value) return '—';
+  return value.length > 16 ? `${value.slice(0, 12)}…` : value;
+}
+
+// esp-web-tools 10.5.2 (the vendored build) dispatches no progress event on
+// <esp-web-install-button>. It opens an <ewt-install-dialog> that appends itself
+// to <body>, flashes, then dispatches one bubbling "closed" event and removes
+// itself. That close also happens when the user cancels, so the banner may only
+// guide the reconnect -- it must never claim the flash succeeded.
+function onInstallerDialogClosed(event) {
+  const target = event && event.target;
+  if (!target || target.tagName !== 'EWT-INSTALL-DIALOG') return;
+  const banner = document.querySelector('[data-firmware="installed"]');
+  if (banner) banner.hidden = false;
+  // Step 1 is where the identity is read, so bring it back into view.
+  const step1 = document.querySelector('[data-usb-action="connect"]');
+  if (step1 && typeof step1.scrollIntoView === 'function') {
+    step1.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function installerElement(board) {
+  // Both the element and the manifest it reads are served by this site; the
+  // element itself refuses a chip family that does not match the manifest.
+  const element = document.createElement('esp-web-install-button');
+  element.setAttribute('manifest', `/${board.installer}`);
+
+  const activate = document.createElement('button');
+  activate.type = 'button';
+  activate.setAttribute('slot', 'activate');
+  activate.className = 'btn primary';
+  activate.textContent = I18N.t('firmware.install');
+  activate.addEventListener('click', () => {
+    // A new attempt invalidates the previous "reconnect and check" prompt.
+    const banner = document.querySelector('[data-firmware="installed"]');
+    if (banner) banner.hidden = true;
+  });
+
+  const unsupported = document.createElement('span');
+  unsupported.setAttribute('slot', 'unsupported');
+  unsupported.className = 'note error';
+  unsupported.textContent = I18N.t('firmware.installUnsupported');
+
+  element.append(activate, unsupported);
+  return element;
+}
+
+function boardCard(board) {
+  const verified = board.status === 'verified';
+  const card = h('article', { class: `board ${verified ? 'is-verified' : 'is-experimental'}` });
+
+  const head = h('div', { class: 'board-head' });
+  head.append(
+    h('h3', { text: board.label }),
+    h('span', {
+      class: `badge ${verified ? 'is-online' : 'is-demo'}`,
+      text: I18N.t(BOARD_STATUS_KEYS[verified ? 'verified' : 'experimental']),
+    })
+  );
+  card.append(head);
+
+  card.append(
+    h('p', {
+      class: 'muted',
+      text: `${board.flash_mb} MB flash · ${board.psram || '—'} · ${board.chip_family}`,
+    })
+  );
+
+  const chips = h('div', { class: 'chips' });
+  for (const capability of board.capabilities || []) {
+    chips.append(
+      h('span', { class: 'chip', text: I18N.t(BOARD_CAP_KEYS[capability] || 'firmware.cap.other') })
+    );
+  }
+  if (!board.bluetooth_classic) {
+    // Never advertised for any current target: no Classic implementation ships.
+    chips.append(h('span', { class: 'chip is-off', text: I18N.t('firmware.cap.noClassic') }));
+  }
+  card.append(chips);
+
+  const noteKey = `firmware.board.${board.id}.note`;
+  const noteText = I18N.t(noteKey);
+  card.append(h('p', { class: 'note', text: noteText === noteKey ? board.note || '' : noteText }));
+
+  if (!board.installer) {
+    card.append(h('p', { class: 'note', text: I18N.t('firmware.notPublished') }));
+    return card;
+  }
+
+  const actions = h('div', { class: 'actions' });
+  actions.append(installerElement(board));
+  if (board.download) {
+    actions.append(
+      h('a', {
+        class: 'btn ghost',
+        href: `/${board.download}`,
+        download: '',
+        text: I18N.t('firmware.download'),
+      })
+    );
+  }
+  card.append(actions);
+  card.append(
+    h('p', {
+      class: 'note mono',
+      text: `${I18N.t('firmware.version')} ${board.version || '—'} · SHA256 ${shortHash(board.sha256)}`,
+    })
+  );
+  return card;
+}
+
+function renderBoards() {
+  const list = document.querySelector('[data-board-list]');
+  if (!list) return;
+  const boards = boardData();
+  list.replaceChildren();
+  if (!boards.length) {
+    list.append(h('p', { class: 'note', text: I18N.t('firmware.noBoards') }));
+    return;
+  }
+  for (const board of boards) list.append(boardCard(board));
+}
+
+function initFirmware() {
+  if (!document.querySelector('[data-board-list]')) return;
+  // One document-level listener: the dialog is created and removed by the
+  // vendored element, so there is no stable node to bind to.
+  document.addEventListener('closed', onInstallerDialogClosed);
+  renderBoards();
 }
 
 // --------------------------------------------------------------------------- //
@@ -562,9 +845,11 @@ async function analyzeInLab(event) {
 // loadGateway() fills in for every page.
 function initStaticPage() {}
 
-// Setup: documentation steps plus the one real operation (USB identity).
+// Setup: the real operations are the USB identity handshake, the in-browser
+// firmware install and the BLE scan; the rest of the page stays documentation.
 function initSetup() {
   initUsb();
+  initFirmware();
 }
 
 function selectDevice(key) {
@@ -1242,6 +1527,7 @@ function rerenderForLanguage() {
     setBarStatus(null);
   }
   renderUsb();
+  renderBoards();
   if (state.report) renderResult(state.report, state.notice || undefined);
 }
 
